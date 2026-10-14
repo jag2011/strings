@@ -115,6 +115,7 @@ var defaults = map[string]string{
 	"file_prefix":          "intl_",
 	"arb_locale":           "0", // write "@@locale" into exports
 	"arb_trailing_newline": "0",
+	"source_revision":      "0", // counts source imports that changed something
 }
 
 func (s *Store) Settings(ctx context.Context) (map[string]string, error) {

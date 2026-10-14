@@ -224,3 +224,17 @@ ul.chips li { display: inline-flex; gap: 6px; align-items: center; border: 1px s
 ul.chips form { margin: 0; }
 ul.chips button { font-size: 16px; line-height: 1; padding: 0 4px; }
 .mono { width: 100%; }
+
+/* Import review */
+
+.summary { display: flex; flex-wrap: wrap; gap: 4px 20px; list-style: none; padding: 0; margin: 0 0 12px; }
+details { margin-top: 8px; }
+summary { cursor: pointer; }
+.changes .text { margin: 0; }
+.changes .text + .text { margin-top: 4px; }
+.changes .old { color: var(--muted); }
+.changes del { background: color-mix(in srgb, var(--missing) 18%, transparent); }
+.changes ins { background: color-mix(in srgb, var(--done) 20%, transparent); text-decoration: none; }
+.strings.changes td.change { width: 56%; }
+.strings.changes td.decide { width: 20%; }
+.decide label.check { display: flex; margin-top: 4px; }

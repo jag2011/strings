@@ -1,0 +1,67 @@
+{{define "content"}}
+{{$d := .Data}}{{$x := $d.Diff}}
+<p class="crumbs"><a href="/admin">Settings</a> /</p>
+<h1>Review import</h1>
+{{with $d.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
+
+<section class="card">
+  <h2>{{$d.File}}</h2>
+  <p>{{if $x.Modified}}Source revision <strong>{{$x.Revision}} → {{add $x.Revision 1}}</strong>
+     {{- else}}No changes. The source stays at revision <strong>{{$x.Revision}}</strong>.{{end}}</p>
+  <ul class="summary">
+    <li><strong>{{len $x.Added}}</strong> added</li>
+    <li><strong>{{len $x.Changed}}</strong> changed</li>
+    <li><strong>{{len $x.Removed}}</strong> removed</li>
+    <li><strong>{{$x.Unchanged}}</strong> unchanged</li>
+  </ul>
+  {{with $x.Added}}
+  <details>
+    <summary>Added keys</summary>
+    <p class="mono small">{{range $i, $k := .}}{{if $i}}, {{end}}{{$k}}{{end}}</p>
+  </details>
+  {{end}}
+  {{with $x.Removed}}
+  <details>
+    <summary>Removed keys</summary>
+    <p class="muted small">No longer exported. Their translations stay in the history and come back if the key does.</p>
+    <p class="mono small">{{range $i, $k := .}}{{if $i}}, {{end}}{{$k}}{{end}}</p>
+  </details>
+  {{end}}
+  {{with $d.Others}}<p class="muted small">Imported along with it: {{range $i, $f := .}}{{if $i}}, {{end}}{{$f}}{{end}}</p>{{end}}
+</section>
+
+<form method="post" action="/admin/import/{{$d.ID}}">
+  <input type="hidden" name="revision" value="{{$x.Revision}}">
+  {{with $x.Changed}}
+  <h2>Changed strings</h2>
+  <p class="muted small">Choose what happens to the existing translations. <em>Keep</em> them for typo fixes and small edits,
+    <em>mark them outdated</em> when the meaning changed, <em>remove</em> them to have the string translated from scratch.</p>
+  <table class="strings changes">
+    <thead><tr><th>Key</th><th>Old → new</th><th>Translations</th></tr></thead>
+    <tbody>
+    {{range .}}
+    <tr>
+      <td class="key">{{.Key}}{{if .WasDraft}} <span class="tag">was draft</span>{{end}}</td>
+      <td class="change">{{with diff .Old .New}}
+        <p class="text old">{{.Pre}}{{with .Old}}<del>{{.}}</del>{{end}}{{.Suf}}</p>
+        <p class="text new">{{.Pre}}{{with .New}}<ins>{{.}}</ins>{{end}}{{.Suf}}</p>
+      {{- end}}</td>
+      <td class="decide">
+        {{if .Translations}}
+        <span class="muted small">{{.Translations}} {{plural .Translations "translation" "translations"}}</span>
+        <label class="check"><input type="radio" name="t.{{.Key}}" value="keep"{{if not .WasDraft}} checked{{end}}> Keep</label>
+        <label class="check"><input type="radio" name="t.{{.Key}}" value="outdated"{{if .WasDraft}} checked{{end}}> Mark outdated</label>
+        <label class="check"><input type="radio" name="t.{{.Key}}" value="remove"> Remove</label>
+        {{else}}<span class="muted small">No translations</span>{{end}}
+      </td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{end}}
+  <div class="actions">
+    <button class="primary">Import</button>
+    <button formaction="/admin/import/{{$d.ID}}/cancel">Cancel</button>
+  </div>
+</form>
+{{end}}

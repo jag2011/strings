@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/jag2011/strings/internal/arb"
@@ -19,48 +20,138 @@ func sourceHash(text string) string {
 	return hex.EncodeToString(h[:])[:12]
 }
 
+// What happens to the translations of a source string whose text changed.
+const (
+	KeepTranslations    = "keep"     // still up to date, e.g. after a typo fix
+	OutdateTranslations = "outdated" // flagged until someone checks them
+	RemoveTranslations  = "remove"   // missing again; history keeps them
+)
+
+var Decisions = []string{KeepTranslations, OutdateTranslations, RemoveTranslations}
+
 type SourceResult struct {
 	Added, Changed, Removed, Unchanged int
+	Kept, Outdated, Cleared            int // changed strings by what happened to their translations
+	Revision                           int // source revision after the import
+}
+
+// SourceDiff is what importing a source file would change.
+type SourceDiff struct {
+	Revision  int // current revision; a modifying import makes it Revision+1
+	Added     []string
+	Removed   []string
+	Changed   []Change
+	Unchanged int
+	Modified  bool // texts, metadata or order differ
+}
+
+type Change struct {
+	Key, Old, New    string
+	OldHash, NewHash string
+	Translations     int  // in the current languages
+	WasDraft         bool // translations of draft text are rarely worth keeping
+}
+
+type querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func revision(ctx context.Context, q querier) (int, error) {
+	var v string
+	err := q.QueryRowContext(ctx, "SELECT value FROM settings WHERE key = 'source_revision'").Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	n, _ := strconv.Atoi(v)
+	return n, err
+}
+
+func diffSource(ctx context.Context, q querier, f *arb.File) (*SourceDiff, error) {
+	type old struct {
+		text, hash, meta string
+		position         int
+		draft            bool
+	}
+	existing := map[string]old{} // keys not removed
+	rows, err := q.QueryContext(ctx, "SELECT key, text, hash, coalesce(meta, ''), position, draft FROM source_strings WHERE removed = 0")
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var k string
+		var o old
+		if err := rows.Scan(&k, &o.text, &o.hash, &o.meta, &o.position, &o.draft); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		existing[k] = o
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	d := &SourceDiff{}
+	if d.Revision, err = revision(ctx, q); err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	for i, m := range f.Messages {
+		seen[m.Key] = true
+		o, ok := existing[m.Key]
+		hash := sourceHash(m.Text)
+		switch {
+		case !ok:
+			d.Added = append(d.Added, m.Key)
+		case o.hash != hash:
+			c := Change{Key: m.Key, Old: o.text, New: m.Text, OldHash: o.hash, NewHash: hash, WasDraft: o.draft}
+			if err := q.QueryRowContext(ctx, `SELECT count(*) FROM translations t JOIN languages l ON l.code = t.lang
+				WHERE t.key = ?`, m.Key).Scan(&c.Translations); err != nil {
+				return nil, err
+			}
+			d.Changed = append(d.Changed, c)
+		default:
+			d.Unchanged++
+			if o.meta != string(m.Meta) || o.position != i {
+				d.Modified = true
+			}
+		}
+	}
+	for k := range existing {
+		if !seen[k] {
+			d.Removed = append(d.Removed, k)
+		}
+	}
+	sort.Strings(d.Removed)
+	d.Modified = d.Modified || len(d.Added) > 0 || len(d.Changed) > 0 || len(d.Removed) > 0
+	return d, nil
+}
+
+// PreviewSource returns what ImportSource would change, without changing it.
+func (s *Store) PreviewSource(ctx context.Context, f *arb.File) (*SourceDiff, error) {
+	return diffSource(ctx, s.r, f)
 }
 
 // ImportSource makes f the source strings. Keys missing from f are marked
-// removed: they are kept for history but no longer exported.
-func (s *Store) ImportSource(ctx context.Context, f *arb.File) (SourceResult, error) {
+// removed: they are kept for history but no longer exported. decide says per
+// changed key what happens to its translations; keys not in it (or a nil
+// map) get OutdateTranslations. The revision goes up if anything changed.
+func (s *Store) ImportSource(ctx context.Context, f *arb.File, decide map[string]string) (SourceResult, error) {
 	var res SourceResult
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		existing := map[string]string{} // key -> hash, for keys not removed
-		rows, err := tx.QueryContext(ctx, "SELECT key, hash, removed FROM source_strings")
+		d, err := diffSource(ctx, tx, f)
 		if err != nil {
 			return err
 		}
-		for rows.Next() {
-			var k, h string
-			var removed bool
-			if err := rows.Scan(&k, &h, &removed); err != nil {
-				rows.Close()
-				return err
-			}
-			if !removed {
-				existing[k] = h
-			}
-		}
-		rows.Close()
+		res.Added, res.Changed, res.Removed, res.Unchanged = len(d.Added), len(d.Changed), len(d.Removed), d.Unchanged
+		res.Revision = d.Revision
 
 		for i, m := range f.Messages {
-			hash := sourceHash(m.Text)
 			var meta any
 			if len(m.Meta) > 0 {
 				meta = string(m.Meta)
 			}
-			switch old, ok := existing[m.Key]; {
-			case !ok:
-				res.Added++
-			case old != hash:
-				res.Changed++
-			default:
-				res.Unchanged++
-			}
-			delete(existing, m.Key)
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO source_strings (key, text, hash, meta, draft, position, removed) VALUES (?, ?, ?, ?, ?, ?, 0)
 				ON CONFLICT (key) DO UPDATE SET
@@ -68,20 +159,41 @@ func (s *Store) ImportSource(ctx context.Context, f *arb.File) (SourceResult, er
 					position = excluded.position, removed = 0,
 					updated_at = CASE WHEN source_strings.hash != excluded.hash OR source_strings.removed
 						THEN datetime('now') ELSE source_strings.updated_at END`,
-				m.Key, m.Text, hash, meta, arb.Draft(m.Meta), i); err != nil {
+				m.Key, m.Text, sourceHash(m.Text), meta, arb.Draft(m.Meta), i); err != nil {
 				return err
 			}
 		}
-		for k := range existing {
-			res.Removed++
+		for _, k := range d.Removed {
 			if _, err := tx.ExecContext(ctx, "UPDATE source_strings SET removed = 1, updated_at = datetime('now') WHERE key = ?", k); err != nil {
 				return err
 			}
 		}
-		return setSettings(ctx, tx, map[string]string{
+		for _, c := range d.Changed {
+			var err error
+			switch decide[c.Key] {
+			case KeepTranslations:
+				// Only translations that were up to date; outdated ones stay outdated.
+				res.Kept++
+				_, err = tx.ExecContext(ctx, "UPDATE translations SET source_hash = ? WHERE key = ? AND source_hash = ?", c.NewHash, c.Key, c.OldHash)
+			case RemoveTranslations:
+				res.Cleared++
+				_, err = tx.ExecContext(ctx, "DELETE FROM translations WHERE key = ?", c.Key)
+			default:
+				res.Outdated++
+			}
+			if err != nil {
+				return err
+			}
+		}
+		set := map[string]string{
 			"arb_locale":           boolSetting(f.Locale != ""),
 			"arb_trailing_newline": boolSetting(f.TrailingNewline),
-		})
+		}
+		if d.Modified {
+			res.Revision++
+			set["source_revision"] = strconv.Itoa(res.Revision)
+		}
+		return setSettings(ctx, tx, set)
 	})
 	return res, err
 }
@@ -554,9 +666,9 @@ type ImportResult struct {
 }
 
 // ImportFiles imports ARB files named like "intl_de.arb". The file in the
-// source language is imported first and sets the export file prefix; the
-// others seed translations and add their languages.
-func (s *Store) ImportFiles(ctx context.Context, files map[string][]byte) ([]ImportResult, error) {
+// source language is imported first, with decide as in ImportSource, and sets
+// the export file prefix; the others seed translations and add their languages.
+func (s *Store) ImportFiles(ctx context.Context, files map[string][]byte, decide map[string]string) ([]ImportResult, error) {
 	set, err := s.Settings(ctx)
 	if err != nil {
 		return nil, err
@@ -586,7 +698,7 @@ func (s *Store) ImportFiles(ctx context.Context, files map[string][]byte) ([]Imp
 				r.Err = fmt.Errorf("@@locale %q does not match the file name", f.Locale)
 			} else if lang == set["source_lang"] {
 				var res SourceResult
-				if res, r.Err = s.ImportSource(ctx, f); r.Err == nil {
+				if res, r.Err = s.ImportSource(ctx, f, decide); r.Err == nil {
 					r.Source = &res
 					r.Err = s.SetSettings(ctx, map[string]string{"file_prefix": prefix})
 				}
@@ -599,4 +711,62 @@ func (s *Store) ImportFiles(ctx context.Context, files map[string][]byte) ([]Imp
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// PreviewFiles returns what importing files would change in the source
+// strings, and the name of the source file. The diff is nil if files hold no
+// importable source file; ImportFiles reports why.
+func (s *Store) PreviewFiles(ctx context.Context, files map[string][]byte) (*SourceDiff, string, error) {
+	set, err := s.Settings(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	for name, data := range files {
+		_, lang, ok := arb.SplitFilename(name)
+		if !ok || lang != set["source_lang"] {
+			continue
+		}
+		f, err := arb.Parse(data)
+		if err != nil || (f.Locale != "" && f.Locale != lang) {
+			return nil, "", nil
+		}
+		d, err := s.PreviewSource(ctx, f)
+		return d, name, err
+	}
+	return nil, "", nil
+}
+
+// SaveUpload keeps files until they are imported or dropped, and returns an
+// id for them. Uploads older than a day are deleted.
+func (s *Store) SaveUpload(ctx context.Context, files map[string][]byte) (string, error) {
+	data, err := json.Marshal(files)
+	if err != nil {
+		return "", err
+	}
+	id, _ := NewToken()
+	err = s.tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM uploads WHERE created_at < datetime('now', '-1 day')"); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, "INSERT INTO uploads (id, files) VALUES (?, ?)", id, data)
+		return err
+	})
+	return id, err
+}
+
+func (s *Store) Upload(ctx context.Context, id string) (map[string][]byte, error) {
+	var data []byte
+	err := s.r.QueryRowContext(ctx, "SELECT files FROM uploads WHERE id = ?", id).Scan(&data)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, err
+	}
+	var files map[string][]byte
+	return files, json.Unmarshal(data, &files)
+}
+
+func (s *Store) DeleteUpload(ctx context.Context, id string) error {
+	_, err := s.w.ExecContext(ctx, "DELETE FROM uploads WHERE id = ?", id)
+	return err
 }

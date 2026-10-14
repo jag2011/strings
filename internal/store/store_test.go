@@ -39,7 +39,7 @@ func entry(t *testing.T, s *Store, lang, key string) *Entry {
 
 func TestSourceAndOutdated(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	if _, err := s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana {n}", "c": "Cherry"}`)); err != nil {
+	if _, err := s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana {n}", "c": "Cherry"}`), nil); err != nil {
 		t.Fatal(err)
 	}
 	res, err := s.ImportTranslations(ctx, "de", parse(t, `{"a": "Apfel", "b": "Banane", "x": "?"}`))
@@ -51,11 +51,11 @@ func TestSourceAndOutdated(t *testing.T) {
 	}
 
 	// Change a, remove c.
-	src, err := s.ImportSource(ctx, parse(t, `{"b": "Banana {n}", "a": "Apples"}`))
+	src, err := s.ImportSource(ctx, parse(t, `{"b": "Banana {n}", "a": "Apples"}`), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if src != (SourceResult{Changed: 1, Removed: 1, Unchanged: 1}) {
+	if src != (SourceResult{Changed: 1, Removed: 1, Unchanged: 1, Outdated: 1, Revision: 2}) {
 		t.Fatalf("source: %+v", src)
 	}
 	if !entry(t, s, "de", "a").Outdated {
@@ -89,7 +89,7 @@ func TestSourceAndOutdated(t *testing.T) {
 
 func TestSaveConflictAndRevert(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	s.ImportSource(ctx, parse(t, `{"a": "Apple"}`))
+	s.ImportSource(ctx, parse(t, `{"a": "Apple"}`), nil)
 	s.AddLanguage(ctx, "de")
 	u1, _ := s.CreateUser(ctx, "one@example.com", "One", "translator")
 	u2, _ := s.CreateUser(ctx, "two@example.com", "Two", "translator")
@@ -126,7 +126,7 @@ func TestSaveConflictAndRevert(t *testing.T) {
 
 func TestListAndNext(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	s.ImportSource(ctx, parse(t, `{"a": "1", "b": "2", "c": "3 100%", "d": "4"}`))
+	s.ImportSource(ctx, parse(t, `{"a": "1", "b": "2", "c": "3 100%", "d": "4"}`), nil)
 	s.ImportTranslations(ctx, "de", parse(t, `{"b": "zwei"}`))
 
 	rows, n, _ := s.List(ctx, "de", FilterTodo, "", 0, 10)
@@ -151,7 +151,7 @@ func TestListAndNext(t *testing.T) {
 
 func TestDrafts(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "b placeholder", "@b": {"x-draft": true}, "c": "Cherry", "@c": {"x-draft": false}}`))
+	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "b placeholder", "@b": {"x-draft": true}, "c": "Cherry", "@c": {"x-draft": false}}`), nil)
 	s.AddLanguage(ctx, "de")
 
 	if _, n, _ := s.List(ctx, "de", FilterAll, "", 0, 10); n != 2 {
@@ -177,9 +177,54 @@ func TestDrafts(t *testing.T) {
 	}
 
 	// Dropping the tag makes it translatable.
-	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana", "c": "Cherry"}`))
+	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana", "c": "Cherry"}`), nil)
 	if _, n, _ := s.List(ctx, "de", FilterAll, "", 0, 10); n != 3 {
 		t.Errorf("list after finishing the draft: %d", n)
+	}
+}
+
+func TestSourceDecisions(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	s.ImportSource(ctx, parse(t, `{"a": "Teh cat", "b": "Dog", "c": "Bird", "d": "Fish"}`), nil)
+	s.ImportTranslations(ctx, "de", parse(t, `{"a": "Die Katze", "b": "Hund", "c": "Vogel"}`))
+
+	f := parse(t, `{"a": "The cat", "b": "Wolf", "c": "Eagle", "d": "Fish", "e": "New"}`)
+	d, err := s.PreviewSource(ctx, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Revision != 1 || !d.Modified || len(d.Added) != 1 || len(d.Changed) != 3 || d.Unchanged != 1 || d.Changed[0].Translations != 1 {
+		t.Fatalf("preview: %+v", d)
+	}
+	if e := entry(t, s, "de", "a"); e.Source != "Teh cat" {
+		t.Fatal("preview must not change anything")
+	}
+
+	res, err := s.ImportSource(ctx, f, map[string]string{"a": KeepTranslations, "c": RemoveTranslations})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Kept != 1 || res.Outdated != 1 || res.Cleared != 1 || res.Revision != 2 {
+		t.Errorf("result: %+v", res)
+	}
+	if e := entry(t, s, "de", "a"); e.Outdated || e.Text != "Die Katze" {
+		t.Errorf("a kept: %+v", e.Row)
+	}
+	if e := entry(t, s, "de", "b"); !e.Outdated {
+		t.Errorf("b should be outdated")
+	}
+	if e := entry(t, s, "de", "c"); e.Has || len(e.History) != 1 {
+		t.Errorf("c removed, history kept: %+v", e)
+	}
+
+	// The same file again changes nothing and keeps the revision.
+	if d, _ := s.PreviewSource(ctx, f); d.Modified || d.Revision != 2 {
+		t.Errorf("reimport: %+v", d)
+	}
+	// A metadata change alone is a new revision.
+	res, _ = s.ImportSource(ctx, parse(t, `{"a": "The cat", "@a": {"description": "Pet"}, "b": "Wolf", "c": "Eagle", "d": "Fish", "e": "New"}`), nil)
+	if res.Revision != 3 || res.Changed != 0 {
+		t.Errorf("metadata change: %+v", res)
 	}
 }
 

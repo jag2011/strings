@@ -168,7 +168,7 @@ func importFiles(dbPath string, paths []string) error {
 		files[filepath.Base(p)] = data
 	}
 	return withStore(dbPath, func(s *store.Store) error {
-		res, err := s.ImportFiles(context.Background(), files)
+		res, err := s.ImportFiles(context.Background(), files, nil)
 		if err != nil {
 			return err
 		}
@@ -179,8 +179,8 @@ func importFiles(dbPath string, paths []string) error {
 				failed = true
 				fmt.Printf("%-20s error: %v\n", r.File, r.Err)
 			case r.Source != nil:
-				fmt.Printf("%-20s source: %d added, %d changed, %d removed, %d unchanged\n",
-					r.File, r.Source.Added, r.Source.Changed, r.Source.Removed, r.Source.Unchanged)
+				fmt.Printf("%-20s source: revision %d, %d added, %d changed, %d removed, %d unchanged\n",
+					r.File, r.Source.Revision, r.Source.Added, r.Source.Changed, r.Source.Removed, r.Source.Unchanged)
 			default:
 				t := r.Trans
 				fmt.Printf("%-20s %d added, %d updated, %d unchanged\n", r.File, t.Added, t.Updated, t.Unchanged)

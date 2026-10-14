@@ -60,6 +60,7 @@ func New(s *store.Store) (*Server, error) {
 		"date":     func(s string) string { return s[:min(len(s), 16)] + " UTC" },
 		"langName": langName,
 		"add":      func(a, b int) int { return a + b },
+		"diff":     diffText,
 		// For the textarea: lang enables the browser's spell checker in the
 		// right language, dir handles right-to-left scripts.
 		"bcp47": func(code string) string { return strings.ReplaceAll(code, "_", "-") },
@@ -112,6 +113,9 @@ func (srv *Server) Handler() http.Handler {
 	admin("POST /admin/languages", srv.adminAddLanguage)
 	admin("POST /admin/languages/{lang}/remove", srv.adminRemoveLanguage)
 	admin("POST /admin/import", srv.adminImport)
+	admin("GET /admin/import/{id}", srv.adminReview)
+	admin("POST /admin/import/{id}", srv.adminConfirmImport)
+	admin("POST /admin/import/{id}/cancel", srv.adminCancelImport)
 	admin("POST /admin/tokens", srv.adminCreateToken)
 	admin("POST /admin/tokens/{id}/delete", srv.adminDeleteToken)
 	admin("GET /admin/users", srv.adminUsers)

@@ -11,7 +11,8 @@
     <li>
       <strong>{{.File}}</strong>
       {{if .Err}}<span class="error-text">{{.Err}}</span>
-      {{else if .Source}}source · {{.Source.Added}} added, {{.Source.Changed}} changed, {{.Source.Removed}} removed, {{.Source.Unchanged}} unchanged
+      {{else if .Source}}source · revision {{.Source.Revision}} · {{.Source.Added}} added, {{.Source.Changed}} changed, {{.Source.Removed}} removed, {{.Source.Unchanged}} unchanged
+        {{with .Source.Changed}}<br><span class="muted small">Translations of changed strings: {{$r.Source.Kept}} kept, {{$r.Source.Outdated}} marked outdated, {{$r.Source.Cleared}} removed</span>{{end}}
       {{else if .Trans}}{{langName .Lang}} · {{.Trans.Added}} added, {{.Trans.Updated}} updated, {{.Trans.Unchanged}} unchanged
         {{with .Trans.Skipped}}<br><span class="muted small">{{len .}} kept because they were edited here</span>{{end}}
         {{with .Trans.Unknown}}<br><span class="muted small">{{len .}} keys not in the source, ignored</span>{{end}}
@@ -66,7 +67,8 @@
   <h2>Import</h2>
   <p>Select ARB files named like <code>{{$s.file_prefix}}{{$s.source_lang}}.arb</code> and <code>{{$s.file_prefix}}de.arb</code>.
      The {{langName $s.source_lang}} file becomes the source. The others seed translations and add their language;
-     strings edited here are never overwritten.</p>
+     strings edited here are never overwritten. A new source file is shown for review before it is imported.
+     The source is at revision {{$s.source_revision}}.</p>
   <form method="post" action="/admin/import" enctype="multipart/form-data" class="inline">
     <input type="file" name="files" accept=".arb" multiple required>
     <button>Import</button>

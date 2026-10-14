@@ -74,6 +74,16 @@ Import:
   dropping it makes the string translatable.
 - A source import updates texts and hashes and marks keys that disappeared as
   removed. They stay in the history but are no longer exported.
+- Every source import that changes texts, metadata or order raises the source
+  revision by one.
+- A source file uploaded in the web UI is kept in `uploads` and shown for
+  review first: revision, added, removed and unchanged counts, and every
+  changed string with its old and new text. Per changed string the admin
+  chooses what happens to its translations: *keep* (still up to date, e.g. a
+  typo fix; the default), *mark outdated* (the default for former drafts) or
+  *remove* (missing again, history keeps them). Confirming checks that the
+  revision is still the one reviewed. The API and the `import` command don't
+  ask and mark translations of changed strings outdated.
 - Translation imports never overwrite strings edited in strings.
 - Empty translations of non-empty source text are treated as missing, so the
   app falls back to the source language instead of showing nothing.

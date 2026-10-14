@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -99,6 +101,8 @@ func (srv *Server) adminRemoveLanguage(w http.ResponseWriter, r *http.Request, u
 
 const maxUpload = 32 << 20
 
+// adminImport imports uploaded files. If they contain the source file, the
+// upload is kept and the changes are shown for review first.
 func (srv *Server) adminImport(w http.ResponseWriter, r *http.Request, u *store.User) error {
 	if err := r.ParseMultipartForm(maxUpload); err != nil {
 		return badRequest("The upload could not be read.")
@@ -119,11 +123,113 @@ func (srv *Server) adminImport(w http.ResponseWriter, r *http.Request, u *store.
 	if len(files) == 0 {
 		return srv.renderAdmin(w, r, u, http.StatusUnprocessableEntity, adminData{Error: "Choose one or more .arb files."})
 	}
-	res, err := srv.store.ImportFiles(r.Context(), files)
+	diff, _, err := srv.store.PreviewFiles(r.Context(), files)
+	if err != nil {
+		return err
+	}
+	if diff != nil {
+		id, err := srv.store.SaveUpload(r.Context(), files)
+		if err != nil {
+			return err
+		}
+		return redirect(w, r, "/admin/import/"+id, "")
+	}
+	res, err := srv.store.ImportFiles(r.Context(), files, nil)
 	if err != nil {
 		return err
 	}
 	return srv.renderAdmin(w, r, u, http.StatusOK, adminData{Imported: res})
+}
+
+type reviewData struct {
+	ID     string
+	File   string
+	Others []string // translation files imported along with the source
+	Diff   *store.SourceDiff
+	Error  string
+}
+
+func (srv *Server) renderReview(w http.ResponseWriter, r *http.Request, u *store.User, status int, id, msg string) error {
+	files, err := srv.store.Upload(r.Context(), id)
+	if err != nil {
+		return err
+	}
+	d := reviewData{ID: id, Error: msg}
+	if d.Diff, d.File, err = srv.store.PreviewFiles(r.Context(), files); err != nil {
+		return err
+	}
+	if d.Diff == nil {
+		return notFound()
+	}
+	for name := range files {
+		if name != d.File {
+			d.Others = append(d.Others, name)
+		}
+	}
+	sort.Strings(d.Others)
+	return srv.render(w, r, status, "review", u, "Review import", d)
+}
+
+// textDiff is two texts split into their common start and end and the parts
+// that differ, so a typo fix stands out.
+type textDiff struct{ Pre, Old, New, Suf string }
+
+func diffText(old, new string) textDiff {
+	a, b := []rune(old), []rune(new)
+	p := 0
+	for p < len(a) && p < len(b) && a[p] == b[p] {
+		p++
+	}
+	n := 0
+	for n < len(a)-p && n < len(b)-p && a[len(a)-1-n] == b[len(b)-1-n] {
+		n++
+	}
+	return textDiff{string(a[:p]), string(a[p : len(a)-n]), string(b[p : len(b)-n]), string(a[len(a)-n:])}
+}
+
+func (srv *Server) adminReview(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	return srv.renderReview(w, r, u, http.StatusOK, r.PathValue("id"), "")
+}
+
+func (srv *Server) adminConfirmImport(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	id := r.PathValue("id")
+	files, err := srv.store.Upload(r.Context(), id)
+	if err != nil {
+		return err
+	}
+	diff, _, err := srv.store.PreviewFiles(r.Context(), files)
+	if err != nil {
+		return err
+	}
+	if diff == nil {
+		return notFound()
+	}
+	// The choices were made for the source as it was when the page was shown.
+	if r.PostFormValue("revision") != strconv.Itoa(diff.Revision) {
+		return srv.renderReview(w, r, u, http.StatusConflict, id,
+			"The source was imported by someone else in the meantime. Here are the changes against the new state.")
+	}
+	decide := map[string]string{}
+	for _, c := range diff.Changed {
+		if v := r.PostFormValue("t." + c.Key); slices.Contains(store.Decisions, v) {
+			decide[c.Key] = v
+		}
+	}
+	res, err := srv.store.ImportFiles(r.Context(), files, decide)
+	if err != nil {
+		return err
+	}
+	if err := srv.store.DeleteUpload(r.Context(), id); err != nil {
+		return err
+	}
+	return srv.renderAdmin(w, r, u, http.StatusOK, adminData{Imported: res})
+}
+
+func (srv *Server) adminCancelImport(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	if err := srv.store.DeleteUpload(r.Context(), r.PathValue("id")); err != nil {
+		return err
+	}
+	return redirect(w, r, "/admin#import", "Import cancelled. Nothing was changed.")
 }
 
 func (srv *Server) adminCreateToken(w http.ResponseWriter, r *http.Request, u *store.User) error {
@@ -322,12 +428,12 @@ func (srv *Server) apiSource(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	res, err := srv.store.ImportSource(r.Context(), f)
+	res, err := srv.store.ImportSource(r.Context(), f, nil)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]int{"added": res.Added, "changed": res.Changed, "removed": res.Removed, "unchanged": res.Unchanged})
+	writeJSON(w, http.StatusOK, map[string]int{"revision": res.Revision, "added": res.Added, "changed": res.Changed, "removed": res.Removed, "unchanged": res.Unchanged})
 }
 
 func (srv *Server) apiTranslations(w http.ResponseWriter, r *http.Request) {

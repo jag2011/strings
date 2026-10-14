@@ -14,7 +14,8 @@ translated ARBs. One binary, one SQLite file, no JavaScript framework.
   `"@key": {"x-draft": true}` and translators won't see them until you drop
   the tag.
 - **Outdated detection.** When the source text changes, its translations are
-  flagged until someone checks them.
+  flagged until someone checks them. Uploading a new source in the web UI
+  shows a review first, where typo fixes can keep their translations.
 - **ICU-aware validation.** Broken braces, unknown placeholders and lost
   plurals are caught before saving. Language-specific plural categories are
   fine.
@@ -82,7 +83,7 @@ done
 
 | Endpoint | |
 |---|---|
-| `PUT /api/v1/source` | Body: source ARB. Returns added, changed, removed and unchanged counts |
+| `PUT /api/v1/source` | Body: source ARB. Returns the new revision and added, changed, removed and unchanged counts. Translations of changed strings become outdated |
 | `PUT /api/v1/translations/{lang}` | Body: ARB. Seeds a language; never overwrites edits made in strings |
 | `GET /api/v1/arb/{prefix}{lang}.arb` | One language |
 | `GET /api/v1/arb.zip` | All target languages |

@@ -1,8 +1,10 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -37,7 +39,7 @@ func setup(t *testing.T) *env {
 
 	ctx := context.Background()
 	f, _ := arb.Parse([]byte(`{"hello": "Hello {name}!", "@hello": {"description": "Greeting"}, "bye": "Bye", "items": "{n, plural, one{# item} other{# items}}"}`))
-	s.ImportSource(ctx, f)
+	s.ImportSource(ctx, f, nil)
 	s.AddLanguage(ctx, "de")
 	return &env{t: t, store: s, srv: ts}
 }
@@ -222,4 +224,105 @@ func TestAPI(t *testing.T) {
 	if code, _ := do("GET", "/api/v1/arb.zip", "", token); code != 200 {
 		t.Errorf("zip: %d", code)
 	}
+}
+
+func (e *env) upload(c *http.Client, files map[string]string) *http.Response {
+	e.t.Helper()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	for name, content := range files {
+		fw, _ := mw.CreateFormFile("files", name)
+		fw.Write([]byte(content))
+	}
+	mw.Close()
+	req, _ := http.NewRequest("POST", e.srv.URL+"/admin/import", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	res, err := c.Do(req)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	res.Body.Close()
+	return res
+}
+
+func TestImportReview(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	c := e.user("admin@example.com", "admin")
+	e.store.ImportTranslations(ctx, "de", mustParse(t, `{"hello": "Hallo {name}!", "bye": "Tschüss"}`))
+
+	// Translation files alone are imported right away.
+	if res := e.upload(c, map[string]string{"intl_fr.arb": `{"bye": "Salut"}`}); res.StatusCode != 200 {
+		t.Fatalf("translations only: %d", res.StatusCode)
+	}
+
+	// With the source file, the changes are shown first.
+	src := `{"hello": "Hello, {name}!", "bye": "Goodbye", "new": "New"}`
+	res := e.upload(c, map[string]string{"intl_en.arb": src, "intl_de.arb": `{"new": "Neu"}`})
+	review := res.Header.Get("Location")
+	if res.StatusCode != http.StatusSeeOther || !strings.HasPrefix(review, "/admin/import/") {
+		t.Fatalf("upload: %d %s", res.StatusCode, review)
+	}
+	_, body := e.get(c, review)
+	for _, want := range []string{"1 → 2", "Hello<ins>,</ins> {name}!", `name="t.hello" value="keep" checked`, "intl_de.arb"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("review misses %q", want)
+		}
+	}
+	if en, _ := e.store.Entry(ctx, "de", "hello"); en.Source != "Hello {name}!" {
+		t.Fatal("nothing is imported before confirming")
+	}
+
+	// Stale: someone imported the source in between.
+	other := e.upload(c, map[string]string{"intl_en.arb": src}).Header.Get("Location")
+	e.post(c, other, url.Values{"revision": {"1"}})
+	if res := e.post(c, review, url.Values{"revision": {"1"}}); res.StatusCode != http.StatusConflict {
+		t.Errorf("stale review: %d", res.StatusCode)
+	}
+
+	// Cancel drops the upload.
+	if res := e.post(c, review+"/cancel", nil); res.StatusCode != http.StatusSeeOther {
+		t.Errorf("cancel: %d", res.StatusCode)
+	}
+	if res, _ := e.get(c, review); res.StatusCode != 404 {
+		t.Errorf("cancelled upload: %d", res.StatusCode)
+	}
+}
+
+func TestImportReviewDecisions(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	c := e.user("admin@example.com", "admin")
+	e.store.ImportTranslations(ctx, "de", mustParse(t, `{"hello": "Hallo {name}!", "bye": "Tschüss"}`))
+
+	review := e.upload(c, map[string]string{
+		"intl_en.arb": `{"hello": "Hello, {name}!", "bye": "Goodbye", "new": "New"}`,
+		"intl_de.arb": `{"new": "Neu"}`,
+	}).Header.Get("Location")
+	res := e.post(c, review, url.Values{"revision": {"1"}, "t.hello": {"keep"}, "t.bye": {"remove"}})
+	if res.StatusCode != 200 {
+		t.Fatalf("confirm: %d", res.StatusCode)
+	}
+	if en, _ := e.store.Entry(ctx, "de", "hello"); en.Outdated || en.Source != "Hello, {name}!" {
+		t.Errorf("hello kept: %+v", en.Row)
+	}
+	if en, _ := e.store.Entry(ctx, "de", "bye"); en.Has {
+		t.Errorf("bye removed: %+v", en.Row)
+	}
+	if en, _ := e.store.Entry(ctx, "de", "new"); en.Text != "Neu" {
+		t.Errorf("translation file imported after the source: %+v", en.Row)
+	}
+	if res, _ := e.get(c, review); res.StatusCode != 404 {
+		t.Errorf("upload should be gone after import: %d", res.StatusCode)
+	}
+}
+
+func mustParse(t *testing.T, src string) *arb.File {
+	t.Helper()
+	f, err := arb.Parse([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
 }
