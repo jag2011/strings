@@ -1,0 +1,21 @@
+{{define "content"}}
+<h1>My edits</h1>
+<p class="muted">Logged in as {{.User.Name}} ({{.User.Email}}).</p>
+{{if not .Data}}
+  <p class="empty">No edits yet.</p>
+{{else}}
+<table class="strings">
+  <thead><tr><th>When</th><th>Language</th><th>Key</th><th>Text</th></tr></thead>
+  <tbody>
+  {{range .Data}}
+  <tr>
+    <td class="nowrap muted">{{date .CreatedAt}}</td>
+    <td>{{.Lang}}</td>
+    <td class="key"><a href="/t/{{.Lang}}/{{esc .Key}}">{{.Key}}</a></td>
+    <td lang="{{bcp47 .Lang}}" dir="{{dir .Lang}}"><span class="text">{{.Text}}</span>{{if not .Current}} <span class="tag">replaced</span>{{end}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+{{end}}

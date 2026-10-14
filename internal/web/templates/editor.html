@@ -1,0 +1,76 @@
+{{define "content"}}
+{{$d := .Data}}{{$e := $d.Entry}}
+<p class="crumbs"><a href="/">Languages</a> / <a href="{{$d.ListURL}}">{{langName $d.Lang}}</a> /</p>
+<h1 class="key-title">{{$e.Key}}</h1>
+
+<section class="source card">
+  <h2 class="label">{{langName .Settings.source_lang}}</h2>
+  <p class="text" id="source">{{$e.Source}}</p>
+  {{with $d.Description}}<p class="description">{{.}}</p>{{end}}
+  {{with $d.Placeholders}}
+  <dl class="placeholders">
+    {{range .}}<dt><code>{{"{"}}{{.Name}}{{"}"}}</code></dt><dd>{{.Type}}{{with .Example}} · e.g. {{.}}{{end}}</dd>{{end}}
+  </dl>
+  {{end}}
+  {{if $e.Outdated}}<p class="note outdated">The source text changed on {{date $e.SourceSince}}. Check that the translation still fits, then save it, even unchanged.</p>{{end}}
+</section>
+
+<form method="post" class="editor" data-editor>
+  <input type="hidden" name="base" value="{{$d.Base}}">
+  <input type="hidden" name="filter" value="{{$d.Filter}}">
+  <input type="hidden" name="q" value="{{$d.Q}}">
+
+  {{if $d.Conflict}}
+  <div class="error" role="alert">
+    <p>Someone else saved this string while you were editing. Their version:</p>
+    <p class="text">{{$e.Text}}</p>
+    <p>Your text is still in the box below. Saving it replaces theirs.</p>
+  </div>
+  {{end}}
+  {{with $d.Problems}}<ul class="warning">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
+  {{with $d.Errors}}<ul class="error" role="alert">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
+  {{with $d.Warns}}<ul class="warning" role="alert">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
+
+  <label for="text" class="label">{{langName $d.Lang}}
+    {{if $e.Has}}<span class="muted small">· {{$e.Origin}}{{with $e.UserName}} by {{.}}{{end}} · {{date $e.UpdatedAt}}</span>{{end}}
+  </label>
+  <textarea id="text" name="text" lang="{{bcp47 $d.Lang}}" dir="{{dir $d.Lang}}" spellcheck="true" rows="4" autofocus>{{$d.Text}}</textarea>
+
+  <div class="actions">
+    {{if and $d.Warns (not $d.Errors)}}
+    <button class="primary" name="force" value="1">Save anyway</button>
+    {{else}}
+    <button class="primary" name="action" value="next" title="Ctrl+Enter">Save &amp; next</button>
+    <button name="action" value="stay">Save</button>
+    {{end}}
+    <button type="button" data-copy-source hidden>Copy source</button>
+    {{with $d.NextKey}}<a class="skip" href="/t/{{$d.Lang}}/{{esc .}}{{query "filter" $d.Filter "q" $d.Q}}">Skip →</a>{{end}}
+  </div>
+  <p class="muted small hint" hidden data-hint><kbd>Ctrl</kbd>+<kbd>Enter</kbd> saves and opens the next string.</p>
+</form>
+
+{{with $e.History}}
+<section class="history">
+  <h2>History</h2>
+  <ol>
+  {{range .}}
+    <li {{if .Current}}class="current"{{end}}>
+      <p class="text" lang="{{bcp47 $d.Lang}}" dir="{{dir $d.Lang}}">{{.Text}}</p>
+      <p class="muted small">
+        {{date .CreatedAt}} · {{.Origin}}{{with .UserName}} by {{.}}{{end}}
+        {{if .ForOldText}}· for an older source text{{end}}
+        {{if .Current}}· <strong>current</strong>{{end}}
+      </p>
+      {{if not .Current}}
+      <form method="post" action="/t/{{$d.Lang}}/{{esc $e.Key}}/revert/{{.ID}}">
+        <input type="hidden" name="filter" value="{{$d.Filter}}">
+        <input type="hidden" name="q" value="{{$d.Q}}">
+        <button class="small">Restore</button>
+      </form>
+      {{end}}
+    </li>
+  {{end}}
+  </ol>
+</section>
+{{end}}
+{{end}}

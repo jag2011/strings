@@ -1,0 +1,52 @@
+{{define "content"}}
+{{$d := .Data}}
+<h1>Users</h1>
+{{with $d.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
+
+{{with $d.Link}}
+<section class="card" id="link">
+  <h2>Link for {{$d.For.Name}}</h2>
+  <p>Send this link to {{$d.For.Email}}. It sets their password, works once and expires in 7 days.</p>
+  <p><input class="mono" type="text" value="{{.}}" readonly data-select></p>
+</section>
+{{end}}
+
+<section class="card">
+  <h2>Add user</h2>
+  <form method="post" action="/admin/users" class="inline">
+    <input type="email" name="email" placeholder="Email" required aria-label="Email">
+    <input name="name" placeholder="Name (shown in credits)" required aria-label="Name">
+    <select name="role" aria-label="Role">
+      <option value="translator">Translator</option>
+      <option value="admin">Admin</option>
+    </select>
+    <button class="primary">Add and get invite link</button>
+  </form>
+</section>
+
+<table class="users">
+  <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead>
+  <tbody>
+  {{range $d.Users}}
+  <tr {{if .Disabled}}class="disabled"{{end}}>
+    <td><input form="u{{.ID}}" name="name" value="{{.Name}}" required aria-label="Name"></td>
+    <td>{{.Email}}</td>
+    <td>
+      <select form="u{{.ID}}" name="role" aria-label="Role">
+        <option value="translator" {{if eq .Role "translator"}}selected{{end}}>Translator</option>
+        <option value="admin" {{if eq .Role "admin"}}selected{{end}}>Admin</option>
+      </select>
+    </td>
+    <td>
+      <label class="check"><input form="u{{.ID}}" type="checkbox" name="disabled" value="1" {{if .Disabled}}checked{{end}}> disabled</label>
+      {{if not .HasPassword}}<span class="tag">invited</span>{{end}}
+    </td>
+    <td class="nowrap">
+      <form id="u{{.ID}}" method="post" action="/admin/users/{{.ID}}" class="inline-form"><button class="small">Save</button></form>
+      <form method="post" action="/admin/users/{{.ID}}/link" class="inline-form"><button class="small">{{if .HasPassword}}Reset link{{else}}New invite link{{end}}</button></form>
+    </td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}

@@ -1,0 +1,18 @@
+{{define "content"}}
+{{with .Data.User}}
+<form class="narrow card" method="post">
+  <h1>Hello {{.Name}}</h1>
+  <p>Choose a password for <strong>{{.Email}}</strong>.</p>
+  {{with $.Data.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
+  <input type="email" name="email" value="{{.Email}}" autocomplete="username" hidden>
+  <label>Password <input type="password" name="password" minlength="10" autocomplete="new-password" required autofocus></label>
+  <label>Repeat password <input type="password" name="password2" minlength="10" autocomplete="new-password" required></label>
+  <button class="primary">Save and log in</button>
+</form>
+{{else}}
+<div class="narrow card">
+  <h1>Link expired</h1>
+  <p>This link was already used or is older than 7 days. Ask an admin for a new one.</p>
+</div>
+{{end}}
+{{end}}

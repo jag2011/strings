@@ -1,0 +1,11 @@
+{{define "content"}}
+<form class="narrow card" method="post" action="/login">
+  <h1>Log in</h1>
+  {{with .Data.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
+  <input type="hidden" name="next" value="{{.Data.Next}}">
+  <label>Email <input type="email" name="email" value="{{.Data.Email}}" autocomplete="username" required {{if not .Data.Email}}autofocus{{end}}></label>
+  <label>Password <input type="password" name="password" autocomplete="current-password" required {{if .Data.Email}}autofocus{{end}}></label>
+  <button class="primary">Log in</button>
+  <p class="muted small">No account yet? Ask an admin for an invite link.</p>
+</form>
+{{end}}

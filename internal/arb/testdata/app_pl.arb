@@ -1,0 +1,6 @@
+{
+  "@@locale": "pl",
+  "app_title": "Planer ogrodu",
+  "beds_count": "{count, plural, =0{Brak grządek} one{Jedna grządka} few{{count} grządki} many{{count} grządek} other{{count} grządki}}",
+  "greeting": "Witaj ponownie, {name}!"
+}

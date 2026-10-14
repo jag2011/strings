@@ -1,0 +1,104 @@
+{{define "content"}}
+{{$d := .Data}}{{$s := .Settings}}
+<h1>Settings</h1>
+{{with $d.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
+
+{{with $d.Imported}}
+<section class="card" id="import-result">
+  <h2>Import result</h2>
+  <ul class="plain">
+  {{range .}}{{$r := .}}
+    <li>
+      <strong>{{.File}}</strong>
+      {{if .Err}}<span class="error-text">{{.Err}}</span>
+      {{else if .Source}}source · {{.Source.Added}} added, {{.Source.Changed}} changed, {{.Source.Removed}} removed, {{.Source.Unchanged}} unchanged
+      {{else if .Trans}}{{langName .Lang}} · {{.Trans.Added}} added, {{.Trans.Updated}} updated, {{.Trans.Unchanged}} unchanged
+        {{with .Trans.Skipped}}<br><span class="muted small">{{len .}} kept because they were edited here</span>{{end}}
+        {{with .Trans.Unknown}}<br><span class="muted small">{{len .}} keys not in the source, ignored</span>{{end}}
+        {{with .Trans.Invalid}}<br><span class="error-text small">{{len .}} failed validation, not imported: {{range $i, $k := .}}{{if $i}}, {{end}}{{$k}}{{end}}</span>{{end}}
+        {{with .Trans.Empty}}<br><span class="muted small">{{len .}} empty, left missing: {{range $i, $k := .}}{{if $i}}, {{end}}<a href="/t/{{$r.Lang}}/{{esc $k}}">{{$k}}</a>{{end}}</span>{{end}}
+        {{with .Trans.Warned}}<br><span class="muted small">{{len .}} imported with warnings: {{range $i, $k := .}}{{if $i}}, {{end}}{{$k}}{{end}}</span>{{end}}
+      {{end}}
+    </li>
+  {{end}}
+  </ul>
+</section>
+{{end}}
+
+{{with $d.NewToken}}
+<section class="card" id="new-token">
+  <h2>New API token</h2>
+  <p>Copy it now, it is not shown again.</p>
+  <p><input class="mono" type="text" value="{{.}}" readonly data-select></p>
+</section>
+{{end}}
+
+<section class="card" id="general">
+  <h2>General</h2>
+  <form method="post" action="/admin/settings" class="grid">
+    <label>Name <input name="name" value="{{$s.name}}" required></label>
+    <label>Accent color <input type="color" name="accent" value="{{$s.accent}}"></label>
+    <label>Source language <input name="source_lang" value="{{$s.source_lang}}" required pattern="[a-z]{2,3}(_[A-Za-z0-9]+)*"></label>
+    <label>File prefix <input name="file_prefix" value="{{$s.file_prefix}}" placeholder="intl_"></label>
+    <p class="muted small span">Files are named <code>{{$s.file_prefix}}de.arb</code>. Flutter's gen-l10n uses <code>app_</code>, intl_utils uses <code>intl_</code>.</p>
+    <div class="span"><button class="primary">Save</button></div>
+  </form>
+</section>
+
+<section class="card" id="languages">
+  <h2>Languages</h2>
+  {{if $d.Languages}}
+  <ul class="chips">
+    {{range $d.Languages}}
+    <li>{{langName .}} <code>{{.}}</code>
+      <form method="post" action="/admin/languages/{{.}}/remove"><button class="link small" title="Remove {{.}}" data-confirm="Remove {{langName .}}? Its translations are kept.">×</button></form>
+    </li>
+    {{end}}
+  </ul>
+  {{end}}
+  <form method="post" action="/admin/languages" class="inline">
+    <input name="code" placeholder="de, pt_BR, zh_Hant" required aria-label="Language code">
+    <button>Add language</button>
+  </form>
+</section>
+
+<section class="card" id="import">
+  <h2>Import</h2>
+  <p>Select ARB files named like <code>{{$s.file_prefix}}{{$s.source_lang}}.arb</code> and <code>{{$s.file_prefix}}de.arb</code>.
+     The {{langName $s.source_lang}} file becomes the source. The others seed translations and add their language;
+     strings edited here are never overwritten.</p>
+  <form method="post" action="/admin/import" enctype="multipart/form-data" class="inline">
+    <input type="file" name="files" accept=".arb" multiple required>
+    <button>Import</button>
+  </form>
+</section>
+
+<section class="card" id="export">
+  <h2>Export</h2>
+  <p><a class="button" href="/export.zip">Download all as zip</a></p>
+  <ul class="plain columns">
+    <li><a href="/export/{{$s.file_prefix}}{{$s.source_lang}}.arb">{{$s.file_prefix}}{{$s.source_lang}}.arb</a> <span class="muted small">source</span></li>
+    {{range $d.Languages}}<li><a href="/export/{{$s.file_prefix}}{{.}}.arb">{{$s.file_prefix}}{{.}}.arb</a></li>{{end}}
+  </ul>
+</section>
+
+<section class="card" id="api">
+  <h2>API tokens</h2>
+  <p>For scripts and CI. Send as <code>Authorization: Bearer st_…</code>.</p>
+  {{if $d.Tokens}}
+  <ul class="plain">
+    {{range $d.Tokens}}
+    <li>{{.Name}} <span class="muted small">created {{date .CreatedAt}}</span>
+      <form method="post" action="/admin/tokens/{{.ID}}/delete" class="inline-form"><button class="link small" data-confirm="Revoke {{.Name}}?">Revoke</button></form>
+    </li>
+    {{end}}
+  </ul>
+  {{end}}
+  <form method="post" action="/admin/tokens" class="inline">
+    <input name="name" placeholder="e.g. CI sync" required aria-label="Token name">
+    <button>Create token</button>
+  </form>
+<pre class="small">curl -X PUT -H "Authorization: Bearer $TOKEN" --data-binary @lib/l10n/{{$s.file_prefix}}{{$s.source_lang}}.arb {{"{"}}host{{"}"}}/api/v1/source
+curl -H "Authorization: Bearer $TOKEN" -o lib/l10n/{{$s.file_prefix}}de.arb {{"{"}}host{{"}"}}/api/v1/arb/{{$s.file_prefix}}de.arb</pre>
+</section>
+{{end}}

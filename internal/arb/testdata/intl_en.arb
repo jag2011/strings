@@ -1,0 +1,8 @@
+{
+  "app_title": "Garden Planner",
+  "beds_count": "{count, plural, =0{No beds yet} =1{One bed} other{{count} beds}}",
+  "greeting": "Welcome back, {name}!",
+  "harvest_hint": "Harvest \"{plant}\" in {days} days.\nWater daily.",
+  "sync_failed": "Sync failed <{code}> & will retry\tlater",
+  "weather_note": "It's {temp}° outside"
+}

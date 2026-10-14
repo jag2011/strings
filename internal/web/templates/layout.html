@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en" style="--accent: {{.Settings.accent}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{with .Title}}{{.}} · {{end}}{{.Settings.name}}</title>
+<link rel="stylesheet" href="{{static "app.css"}}">
+<script src="{{static "app.js"}}" defer></script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/">{{.Settings.name}}</a>
+  {{with .User}}
+  <nav>
+    <a href="/" {{if eq $.Nav "home"}}aria-current="page"{{end}}>Languages</a>
+    <a href="/account" {{if eq $.Nav "account"}}aria-current="page"{{end}}>My edits</a>
+    {{if .IsAdmin}}
+    <a href="/admin" {{if eq $.Nav "admin"}}aria-current="page"{{end}}>Settings</a>
+    <a href="/admin/users" {{if eq $.Nav "users"}}aria-current="page"{{end}}>Users</a>
+    {{end}}
+    <form method="post" action="/logout"><button class="link" title="Log out {{.Email}}">Log out</button></form>
+  </nav>
+  {{end}}
+</header>
+<main>
+{{with .Flash}}<p class="flash" role="status">{{.}}</p>{{end}}
+{{template "content" .}}
+</main>
+</body>
+</html>

@@ -1,0 +1,7 @@
+{
+  "app_title": "Gartenplaner",
+  "beds_count": "{count, plural, =0{Noch keine Beete} =1{Ein Beet} other{{count} Beete}}",
+  "greeting": "Willkommen zurück, {name}!",
+  "harvest_hint": "„{plant}“ in {days} Tagen ernten.\nTäglich gießen.",
+  "weather_note": "Draußen sind es {temp}°"
+}
