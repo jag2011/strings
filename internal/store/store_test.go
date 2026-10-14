@@ -149,6 +149,40 @@ func TestListAndNext(t *testing.T) {
 	}
 }
 
+func TestDrafts(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "b placeholder", "@b": {"x-draft": true}, "c": "Cherry", "@c": {"x-draft": false}}`))
+	s.AddLanguage(ctx, "de")
+
+	if _, n, _ := s.List(ctx, "de", FilterAll, "", 0, 10); n != 2 {
+		t.Errorf("list should hide the draft, got %d", n)
+	}
+	if next, _ := s.Next(ctx, "de", FilterTodo, "", "a", 0); next != "c" {
+		t.Errorf("next should skip the draft: %q", next)
+	}
+	if stats, _ := s.Stats(ctx); stats[0].Total != 2 || stats[0].Missing != 2 {
+		t.Errorf("stats: %+v", stats)
+	}
+	if _, err := s.Entry(ctx, "de", "b"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("entry of draft: %v", err)
+	}
+	if _, err := s.Save(ctx, "de", "b", "x", 0, -1); !errors.Is(err, ErrNotFound) {
+		t.Errorf("save of draft: %v", err)
+	}
+
+	// The source export keeps the draft and its metadata.
+	f, _ := s.Export(ctx, "en")
+	if len(f.Messages) != 3 || !arb.Draft(f.Messages[1].Meta) {
+		t.Errorf("source export: %+v", f.Messages)
+	}
+
+	// Dropping the tag makes it translatable.
+	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana", "c": "Cherry"}`))
+	if _, n, _ := s.List(ctx, "de", FilterAll, "", 0, 10); n != 3 {
+		t.Errorf("list after finishing the draft: %d", n)
+	}
+}
+
 func TestUsersAndTokens(t *testing.T) {
 	s, ctx := open(t), context.Background()
 	u, err := s.CreateUser(ctx, " Admin@Example.com ", "Admin", "admin")

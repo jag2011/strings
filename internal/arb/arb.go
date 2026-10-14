@@ -231,6 +231,15 @@ func Placeholders(meta json.RawMessage) (desc string, ph []Placeholder) {
 	return m.Description, ph
 }
 
+// Draft reports whether "@key" metadata marks the message as a draft with
+// "x-draft": true, meaning its text is a placeholder not ready for translation.
+func Draft(meta json.RawMessage) bool {
+	var m struct {
+		Draft bool `json:"x-draft"`
+	}
+	return len(meta) > 0 && json.Unmarshal(meta, &m) == nil && m.Draft
+}
+
 type Placeholder struct {
 	Name, Type, Example string
 }

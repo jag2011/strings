@@ -62,13 +62,13 @@ func (s *Store) ImportSource(ctx context.Context, f *arb.File) (SourceResult, er
 			}
 			delete(existing, m.Key)
 			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO source_strings (key, text, hash, meta, position, removed) VALUES (?, ?, ?, ?, ?, 0)
+				INSERT INTO source_strings (key, text, hash, meta, draft, position, removed) VALUES (?, ?, ?, ?, ?, ?, 0)
 				ON CONFLICT (key) DO UPDATE SET
-					text = excluded.text, hash = excluded.hash, meta = excluded.meta,
+					text = excluded.text, hash = excluded.hash, meta = excluded.meta, draft = excluded.draft,
 					position = excluded.position, removed = 0,
 					updated_at = CASE WHEN source_strings.hash != excluded.hash OR source_strings.removed
 						THEN datetime('now') ELSE source_strings.updated_at END`,
-				m.Key, m.Text, hash, meta, i); err != nil {
+				m.Key, m.Text, hash, meta, arb.Draft(m.Meta), i); err != nil {
 				return err
 			}
 		}
@@ -188,7 +188,7 @@ var ErrConflict = errors.New("changed by someone else in the meantime")
 func (s *Store) Save(ctx context.Context, lang, key, text string, userID, base int64) (saved bool, err error) {
 	err = s.tx(ctx, func(tx *sql.Tx) error {
 		var hash string
-		err := tx.QueryRowContext(ctx, "SELECT hash FROM source_strings WHERE key = ? AND removed = 0", key).Scan(&hash)
+		err := tx.QueryRowContext(ctx, "SELECT hash FROM source_strings WHERE key = ? AND removed = 0 AND draft = 0", key).Scan(&hash)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		} else if err != nil {
@@ -239,14 +239,15 @@ func (l LangStats) Percent() int {
 }
 
 // Stats counts per language. Human = up-to-date strings written by people
-// (imported or edited here), as opposed to machine translations.
+// (imported or edited here), as opposed to machine translations. Drafts are
+// not counted.
 func (s *Store) Stats(ctx context.Context) ([]LangStats, error) {
 	langs, err := s.Languages(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var total int
-	if err := s.r.QueryRowContext(ctx, "SELECT count(*) FROM source_strings WHERE removed = 0").Scan(&total); err != nil {
+	if err := s.r.QueryRowContext(ctx, "SELECT count(*) FROM source_strings WHERE removed = 0 AND draft = 0").Scan(&total); err != nil {
 		return nil, err
 	}
 	byLang := map[string]*LangStats{}
@@ -259,7 +260,7 @@ func (s *Store) Stats(ctx context.Context) ([]LangStats, error) {
 			coalesce(sum(t.source_hash = s.hash), 0),
 			coalesce(sum(t.source_hash != s.hash), 0),
 			coalesce(sum(t.source_hash = s.hash AND t.origin != 'machine'), 0)
-		FROM translations t JOIN source_strings s ON s.key = t.key AND s.removed = 0
+		FROM translations t JOIN source_strings s ON s.key = t.key AND s.removed = 0 AND s.draft = 0
 		GROUP BY t.lang`)
 	if err != nil {
 		return nil, err
@@ -353,7 +354,7 @@ func searchSQL(q string) (string, []any) {
 
 // List returns one page of strings and the number of matches.
 func (s *Store) List(ctx context.Context, lang, filter, q string, offset, limit int) ([]Row, int, error) {
-	where := " WHERE s.removed = 0 AND " + filterSQL(filter)
+	where := " WHERE s.removed = 0 AND s.draft = 0 AND " + filterSQL(filter)
 	search, sargs := searchSQL(q)
 	args := append([]any{lang}, sargs...)
 
@@ -384,7 +385,7 @@ func (s *Store) List(ctx context.Context, lang, filter, q string, offset, limit 
 func (s *Store) Next(ctx context.Context, lang, filter, q, currentKey string, position int) (string, error) {
 	search, sargs := searchSQL(q)
 	base := `SELECT s.key FROM source_strings s LEFT JOIN translations t ON t.key = s.key AND t.lang = ?
-		WHERE s.removed = 0 AND s.key != ? AND ` + filterSQL(filter) + search
+		WHERE s.removed = 0 AND s.draft = 0 AND s.key != ? AND ` + filterSQL(filter) + search
 	args := append([]any{lang, currentKey}, sargs...)
 	var key string
 	err := s.r.QueryRowContext(ctx, base+" AND s.position > ? ORDER BY s.position LIMIT 1", append(args, position)...).Scan(&key)
@@ -415,7 +416,7 @@ type Version struct {
 }
 
 func (s *Store) Entry(ctx context.Context, lang, key string) (*Entry, error) {
-	r, err := scanRow(s.r.QueryRowContext(ctx, rowSelect+" WHERE s.key = ? AND s.removed = 0", lang, key))
+	r, err := scanRow(s.r.QueryRowContext(ctx, rowSelect+" WHERE s.key = ? AND s.removed = 0 AND s.draft = 0", lang, key))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	} else if err != nil {

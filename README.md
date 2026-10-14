@@ -10,6 +10,9 @@ translated ARBs. One binary, one SQLite file, no JavaScript framework.
 - **Built for translators.** Focus mode with *Save & next*, keyboard only if
   you like, descriptions and placeholders from `@key` metadata, spell checking
   in the target language, full history with one-click restore.
+- **Drafts stay hidden.** Mark unfinished source strings with
+  `"@key": {"x-draft": true}` and translators won't see them until you drop
+  the tag.
 - **Outdated detection.** When the source text changes, its translations are
   flagged until someone checks them.
 - **ICU-aware validation.** Broken braces, unknown placeholders and lost

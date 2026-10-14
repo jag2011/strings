@@ -68,6 +68,10 @@ Import:
 - Parsed with `json.Decoder` tokens to keep the key order, which Go maps lose.
 - `@key` metadata is stored as JSON. Its `description` and placeholder examples
   are shown to translators.
+- `"x-draft": true` in `@key` metadata marks a source string as unfinished, e.g.
+  placeholder text. Drafts are hidden from translators: not listed, not
+  counted, not editable. The tag is re-read on every source import, so
+  dropping it makes the string translatable.
 - A source import updates texts and hashes and marks keys that disappeared as
   removed. They stay in the history but are no longer exported.
 - Translation imports never overwrite strings edited in strings.
@@ -133,7 +137,6 @@ Schema: [`internal/store/schema/001_init.sql`](../internal/store/schema/001_init
 |---|---|
 | Machine translation of missing and outdated strings | Optional; `origin = 'machine'` exists |
 | External auth (OIDC, app handoff) | Map identities to `users` rows |
-| Skip unfinished source strings | E.g. `@key` metadata or a key pattern, so nobody translates placeholders |
 | Per-language permissions | Only if needed |
 | Review mode | Edits wait for approval |
 | Glossary | Shown in the editor |
