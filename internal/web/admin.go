@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -311,6 +312,68 @@ func (srv *Server) adminUserLink(w http.ResponseWriter, r *http.Request, u *stor
 		return err
 	}
 	return srv.renderUsers(w, r, u, http.StatusOK, usersData{Link: baseURL(r) + "/invite/" + token, For: target})
+}
+
+type mergeData struct {
+	From                    *store.User
+	Others                  []*store.User
+	Into                    int64 // preselected after an error
+	Translations, Approvals int
+	App                     string
+	Error                   string
+}
+
+func (srv *Server) renderMerge(w http.ResponseWriter, r *http.Request, u *store.User, status int, msg string) error {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	d := mergeData{Error: msg}
+	d.Into, _ = strconv.ParseInt(r.PostFormValue("into"), 10, 64)
+	var err error
+	if d.From, err = srv.store.User(r.Context(), id); err != nil {
+		return err
+	}
+	if d.Translations, d.Approvals, err = srv.store.Contributions(r.Context(), id); err != nil {
+		return err
+	}
+	users, err := srv.store.Users(r.Context())
+	if err != nil {
+		return err
+	}
+	for _, o := range users {
+		if o.ID != id {
+			d.Others = append(d.Others, o)
+		}
+	}
+	if srv.external != nil {
+		d.App = srv.external.Name
+	}
+	return srv.render(w, r, status, "merge", u, "Merge "+d.From.Name, d)
+}
+
+func (srv *Server) adminMergePage(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	return srv.renderMerge(w, r, u, http.StatusOK, "")
+}
+
+func (srv *Server) adminMerge(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	into, _ := strconv.ParseInt(r.PostFormValue("into"), 10, 64)
+	from, err := srv.store.User(r.Context(), id)
+	if err != nil {
+		return err
+	}
+	target, err := srv.store.User(r.Context(), into)
+	if errors.Is(err, store.ErrNotFound) {
+		return srv.renderMerge(w, r, u, http.StatusUnprocessableEntity, "Choose the user to merge into.")
+	} else if err != nil {
+		return err
+	}
+	// Merging deletes the user, which would sign the admin out mid-way.
+	if id == u.ID {
+		return srv.renderMerge(w, r, u, http.StatusUnprocessableEntity, "You can't merge your own account. Merge the other one into it instead.")
+	}
+	if err := srv.store.MergeUser(r.Context(), id, into); err != nil {
+		return srv.renderMerge(w, r, u, http.StatusUnprocessableEntity, err.Error())
+	}
+	return redirect(w, r, fmt.Sprintf("/admin/users#user-%d", into), "Merged "+from.Name+" into "+target.Name+".")
 }
 
 // Export

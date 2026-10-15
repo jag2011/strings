@@ -29,7 +29,7 @@
   <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead>
   <tbody>
   {{range $d.Users}}
-  <tr {{if .Disabled}}class="disabled"{{end}}>
+  <tr id="user-{{.ID}}" {{if .Disabled}}class="disabled"{{end}}>
     <td><input form="u{{.ID}}" name="name" value="{{.Name}}" required aria-label="Name" {{if .External}}readonly title="Follows their {{$d.App}} account"{{end}}></td>
     <td>{{.Email}}</td>
     <td>
@@ -45,7 +45,16 @@
     </td>
     <td class="nowrap">
       <form id="u{{.ID}}" method="post" action="/admin/users/{{.ID}}" class="inline-form"><button class="small">Save</button></form>
-      {{if or .HasPassword (not .External)}}<form method="post" action="/admin/users/{{.ID}}/link" class="inline-form"><button class="small">{{if .HasPassword}}Reset link{{else}}New invite link{{end}}</button></form>{{end}}
+      {{$link := or .HasPassword (not .External)}}{{$merge := ne .ID $.User.ID}}
+      {{if or $link $merge}}
+      <details class="menu">
+        <summary class="button small" title="More actions" aria-label="More actions for {{.Name}}">⋮</summary>
+        <div class="menu-items">
+          {{if $link}}<form method="post" action="/admin/users/{{.ID}}/link"><button>{{if .HasPassword}}Reset link{{else}}New invite link{{end}}</button></form>{{end}}
+          {{if $merge}}<a href="/admin/users/{{.ID}}/merge">Merge into another user…</a>{{end}}
+        </div>
+      </details>
+      {{end}}
     </td>
   </tr>
   {{end}}

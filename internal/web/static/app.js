@@ -85,6 +85,22 @@
     el.addEventListener("focus", () => el.select());
   }
 
+  // Row menus close on a click elsewhere or Escape, like native menus.
+  const menus = document.querySelectorAll("details.menu");
+  if (menus.length) {
+    const close = (keep) => {
+      for (const m of menus) if (m !== keep) m.open = false;
+    };
+    document.addEventListener("click", (e) => close(e.target.closest("details.menu")));
+    document.addEventListener("keydown", (e) => {
+      const open = [...menus].find((m) => m.open);
+      if (e.key === "Escape" && open) {
+        close();
+        open.querySelector("summary").focus();
+      }
+    });
+  }
+
   for (const el of document.querySelectorAll("[data-confirm]")) {
     el.addEventListener("click", (e) => {
       if (!confirm(el.dataset.confirm)) e.preventDefault();

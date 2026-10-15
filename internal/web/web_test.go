@@ -530,3 +530,44 @@ func TestExternalSignInOff(t *testing.T) {
 		t.Errorf("GET without account server: %d", res.StatusCode)
 	}
 }
+
+func TestMergeUser(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	admin := e.user("admin@example.com", "admin")
+	old, _ := e.store.CreateUser(ctx, "old@crowdin.invalid", "Old", "translator")
+	e.store.Save(ctx, "de", "bye", "Tschüss", old.ID, -1, store.KeepApproval)
+	users, _ := e.store.Users(ctx)
+	var me *store.User
+	for _, u := range users {
+		if u.Email == "admin@example.com" {
+			me = u
+		}
+	}
+	nu, _ := e.store.CreateUser(ctx, "new@example.com", "New", "translator")
+
+	_, body := e.get(admin, "/admin/users")
+	if !strings.Contains(body, fmt.Sprintf(`href="/admin/users/%d/merge"`, old.ID)) || strings.Contains(body, fmt.Sprintf(`/admin/users/%d/merge"`, me.ID)) {
+		t.Error("merge offered for the wrong users")
+	}
+	res, body := e.get(admin, fmt.Sprintf("/admin/users/%d/merge", old.ID))
+	if res.StatusCode != 200 || !strings.Contains(body, "their 1 translation and history") || strings.Contains(body, `value="`+fmt.Sprint(old.ID)+`"`) {
+		t.Errorf("merge page: %d\n%s", res.StatusCode, body)
+	}
+	if res := e.post(admin, fmt.Sprintf("/admin/users/%d/merge", old.ID), url.Values{}); res.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("merge without target: %d", res.StatusCode)
+	}
+	if res := e.post(admin, fmt.Sprintf("/admin/users/%d/merge", me.ID), url.Values{"into": {fmt.Sprint(nu.ID)}}); res.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("merge own account: %d", res.StatusCode)
+	}
+	res = e.post(admin, fmt.Sprintf("/admin/users/%d/merge", old.ID), url.Values{"into": {fmt.Sprint(nu.ID)}})
+	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != fmt.Sprintf("/admin/users#user-%d", nu.ID) {
+		t.Fatalf("merge: %d %s", res.StatusCode, res.Header.Get("Location"))
+	}
+	if n, _, _ := e.store.Contributions(ctx, nu.ID); n != 1 {
+		t.Errorf("translations after merge: %d", n)
+	}
+	if res, _ := e.get(admin, fmt.Sprintf("/admin/users/%d/merge", old.ID)); res.StatusCode != 404 {
+		t.Errorf("merged user's page: %d", res.StatusCode)
+	}
+}

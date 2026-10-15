@@ -17,7 +17,7 @@
     <a href="/account" {{if eq $.Nav "account"}}aria-current="page"{{end}}>My edits</a>
     {{if .IsAdmin}}
     <a href="/admin" {{if eq $.Nav "admin"}}aria-current="page"{{end}}>Settings</a>
-    <a href="/admin/users" {{if eq $.Nav "users"}}aria-current="page"{{end}}>Users</a>
+    <a href="/admin/users" {{if or (eq $.Nav "users") (eq $.Nav "merge")}}aria-current="page"{{end}}>Users</a>
     {{end}}
     <form method="post" action="/logout"><button class="link" title="Log out {{.Email}}">Log out</button></form>
   </nav>

@@ -121,6 +121,56 @@ func (s *Store) UpdateUser(ctx context.Context, id int64, name, role string, dis
 	})
 }
 
+// Contributions counts the current translations credited to a user and the
+// approvals they gave.
+func (s *Store) Contributions(ctx context.Context, id int64) (translations, approvals int, err error) {
+	err = s.r.QueryRowContext(ctx, `
+		SELECT coalesce(sum(user_id = ?1), 0), coalesce(sum(approved_by = ?1), 0) FROM translations
+		WHERE user_id = ?1 OR approved_by = ?1`, id).Scan(&translations, &approvals)
+	return translations, approvals, err
+}
+
+// MergeUser moves the edits and approvals of one user to another and deletes
+// the first, for people with two accounts. The remaining user takes over the
+// external sign-in of the deleted one if they have none.
+func (s *Store) MergeUser(ctx context.Context, from, into int64) error {
+	if from == into {
+		return fmt.Errorf("a user can't be merged into themselves")
+	}
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		var ext sql.NullString
+		err := tx.QueryRowContext(ctx, "SELECT external_id FROM users WHERE id = ?", from).Scan(&ext)
+		if err == nil {
+			err = tx.QueryRowContext(ctx, "SELECT 1 FROM users WHERE id = ?", into).Scan(new(int))
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		} else if err != nil {
+			return err
+		}
+		for _, q := range []string{
+			"UPDATE history SET user_id = ?1 WHERE user_id = ?2",
+			"UPDATE translations SET user_id = ?1 WHERE user_id = ?2",
+			"UPDATE translations SET approved_by = ?1 WHERE approved_by = ?2",
+			"UPDATE approval_log SET user_id = ?1 WHERE user_id = ?2",
+			"DELETE FROM users WHERE id = ?2",
+			"UPDATE users SET external_id = coalesce(external_id, ?3) WHERE id = ?1",
+		} {
+			if _, err := tx.ExecContext(ctx, q, into, from, ext); err != nil {
+				return err
+			}
+		}
+		var admins int
+		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM users WHERE role = 'admin' AND disabled = 0").Scan(&admins); err != nil {
+			return err
+		}
+		if admins == 0 {
+			return fmt.Errorf("there must be at least one active admin")
+		}
+		return nil
+	})
+}
+
 // Login returns the user for valid credentials. Disabled users can't log in.
 func (s *Store) Login(ctx context.Context, email, password string) (*User, error) {
 	var id int64

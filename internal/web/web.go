@@ -129,6 +129,8 @@ func (srv *Server) Handler() http.Handler {
 	admin("POST /admin/users", srv.adminCreateUser)
 	admin("POST /admin/users/{id}", srv.adminUpdateUser)
 	admin("POST /admin/users/{id}/link", srv.adminUserLink)
+	admin("GET /admin/users/{id}/merge", srv.adminMergePage)
+	admin("POST /admin/users/{id}/merge", srv.adminMerge)
 	page("GET /export/{file}", srv.exportFile)
 	page("GET /export.zip", srv.exportZip)
 

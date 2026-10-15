@@ -389,6 +389,11 @@ func TestUsersAndTokens(t *testing.T) {
 		t.Error("disabled user keeps session")
 	}
 
+	// The last admin can't be merged away.
+	if err := s.MergeUser(ctx, u.ID, tr.ID); err == nil {
+		t.Error("merged the last admin away")
+	}
+
 	api, _ := s.CreateAPIToken(ctx, "ci")
 	if !s.CheckAPIToken(ctx, api) || s.CheckAPIToken(ctx, api+"x") || s.CheckAPIToken(ctx, "") {
 		t.Error("api token check")
@@ -445,5 +450,53 @@ func TestActivity(t *testing.T) {
 	s.RemoveLanguage(ctx, "fr")
 	if all, _ := s.Activity(ctx, "", 0, 0, 10); len(all) != 3 {
 		t.Errorf("after removing fr: %d", len(all))
+	}
+}
+
+func TestMergeUser(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana"}`), nil)
+	s.AddLanguage(ctx, "de")
+	s.CreateUser(ctx, "admin@example.com", "Admin", "admin")
+	old, _ := s.CreateUser(ctx, "old@crowdin.invalid", "Old", "proofreader")
+	s.Save(ctx, "de", "a", "Apfel", old.ID, -1, Approve)
+	s.Save(ctx, "de", "b", "Banane", old.ID, -1, KeepApproval)
+	sess, _ := s.CreateSession(ctx, old.ID)
+	if n, a, err := s.Contributions(ctx, old.ID); err != nil || n != 2 || a != 1 {
+		t.Fatalf("contributions: %d %d %v", n, a, err)
+	}
+
+	// The remaining user takes over the external sign-in.
+	s.w.Exec("UPDATE users SET external_id = 'hq-1' WHERE id = ?", old.ID)
+	nu, _ := s.CreateUser(ctx, "new@example.com", "New", "translator")
+	if err := s.MergeUser(ctx, nu.ID, nu.ID); err == nil {
+		t.Error("merged a user into themselves")
+	}
+	if err := s.MergeUser(ctx, old.ID, nu.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.User(ctx, old.ID); !errors.Is(err, ErrNotFound) {
+		t.Error("merged user still there")
+	}
+	if _, err := s.SessionUser(ctx, sess); !errors.Is(err, ErrNotFound) {
+		t.Error("merged user keeps session")
+	}
+	if u, _ := s.ExternalSignIn(ctx, "hq-1", "x@example.com", "New"); u == nil || u.ID != nu.ID {
+		t.Errorf("external sign-in after merge: %+v", u)
+	}
+	e := entry(t, s, "de", "a")
+	if e.UserName != "New" || e.ApprovedBy != "New" || e.History[0].UserName != "New" {
+		t.Errorf("after merge: %+v", e)
+	}
+	if n, a, _ := s.Contributions(ctx, nu.ID); n != 2 || a != 1 {
+		t.Errorf("contributions after merge: %d %d", n, a)
+	}
+	var left int
+	s.w.QueryRow("SELECT count(*) FROM approval_log WHERE user_id = ?", old.ID).Scan(&left)
+	if left != 0 {
+		t.Error("approval log keeps merged user")
+	}
+	if err := s.MergeUser(ctx, old.ID, nu.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("merge unknown user: %v", err)
 	}
 }

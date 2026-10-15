@@ -1,0 +1,27 @@
+{{define "content"}}
+{{$d := .Data}}
+<p class="crumbs"><a href="/admin/users">Users</a></p>
+<h1>Merge {{$d.From.Name}}</h1>
+{{with $d.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
+<section class="card merge">
+  <p>For a person with two accounts: {{$d.From.Name}} <span class="muted">({{$d.From.Email}})</span> is deleted, and
+  {{- if or $d.Translations $d.Approvals}} their {{$d.Translations}} translation{{if ne $d.Translations 1}}s{{end}}
+  {{- if $d.Approvals}}, {{$d.Approvals}} approval{{if ne $d.Approvals 1}}s{{end}}{{end}} and history
+  {{- else}} their history{{end}} move to the user you choose.
+  {{- if $d.From.External}} So does their {{$d.App}} sign-in, unless that user has one already.{{end}}</p>
+  <form method="post">
+    <label>Merge into
+      <select name="into" required>
+        <option value="">Choose a user…</option>
+        {{range $d.Others}}<option value="{{.ID}}" {{if eq .ID $d.Into}}selected{{end}}>{{.Name}} · {{.Email}}</option>
+        {{end}}
+      </select>
+    </label>
+    <div class="actions">
+      <button class="danger">Merge and delete {{$d.From.Name}}</button>
+      <a class="button" href="/admin/users">Cancel</a>
+      <span class="muted small">This can't be undone.</span>
+    </div>
+  </form>
+</section>
+{{end}}
