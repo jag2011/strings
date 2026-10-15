@@ -1,0 +1,41 @@
+{{define "content"}}
+{{$d := .Data}}{{$p := $d.Profile}}
+<h1>{{$p.Name}}{{if $d.Own}} <span class="muted">· you</span>{{end}}</h1>
+<p class="muted small profile-meta">
+  <span class="tag">{{$p.Role}}</span>
+  {{if and $.User.IsAdmin $p.Disabled}}<span class="tag missing">disabled</span>{{end}}
+  member since {{date $p.CreatedAt}}
+  {{if $d.ShowEmail}}· {{$p.Email}}{{end}}
+  {{if $.User.IsAdmin}}· <a href="{{base}}/admin/users#user-{{$p.ID}}">Manage</a>{{end}}
+</p>
+{{if $d.Own}}<p class="muted small">Your email is only shown to you and admins.</p>{{end}}
+
+<div class="with-side">
+<div>
+  <h2>{{if $d.Own}}Your edits and approvals{{else}}Edits and approvals{{end}}</h2>
+  <p class="muted small">Newest first{{if gt $d.Activity.Page 1}} · page {{$d.Activity.Page}}{{end}}. Imports aren't listed.</p>
+  {{template "activity-table" $d.Activity}}
+</div>
+<aside class="side">
+  <section class="side-card">
+    <h2>Contributions</h2>
+    <ul class="stats">
+      <li><strong>{{$d.Translations}}</strong> {{plural $d.Translations "string" "strings"}} translated</li>
+      {{if or $d.Approvals $p.CanApprove}}<li><strong>{{$d.Approvals}}</strong> {{plural $d.Approvals "approval" "approvals"}}</li>{{end}}
+    </ul>
+  </section>
+  {{with $d.Langs}}
+  <section class="side-card">
+    <h2>Languages</h2>
+    <p class="side-note"><em>by number of strings</em></p>
+    <ul class="lang-counts">
+      {{range .}}<li>
+        <a href="{{base}}/t/{{.Lang}}">{{with flag .Lang}}<img class="flag" src="{{static .}}" alt="" width="20" height="15">{{else}}<span class="flag"></span>{{end}}{{langName .Lang}}</a>
+        <span class="muted">{{.Count}}</span>
+      </li>{{end}}
+    </ul>
+  </section>
+  {{end}}
+</aside>
+</div>
+{{end}}

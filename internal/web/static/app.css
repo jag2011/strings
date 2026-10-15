@@ -176,6 +176,10 @@ form.grid .span { grid-column: 1 / -1; }
 .top-members li::before { content: counter(rank); width: 18px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .top-members li span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .top-members .muted { font-variant-numeric: tabular-nums; }
+.lang-counts { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
+.lang-counts li { display: flex; justify-content: space-between; gap: 8px; }
+.lang-counts .muted { font-variant-numeric: tabular-nums; }
+.profile-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: -8px; }
 @media (max-width: 860px) {
   .with-side { grid-template-columns: 1fr; }
   .side { order: -1; }

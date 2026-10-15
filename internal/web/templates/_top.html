@@ -3,7 +3,7 @@
   <h2>Top members</h2>
   <p class="side-note"><em>by number of strings</em></p>
   <ol class="top-members">
-    {{range .}}<li><span>{{.Name}}</span> <span class="muted">{{.Edits}}</span></li>{{end}}
+    {{range .}}<li><span><a href="{{base}}/u/{{.ID}}">{{.Name}}</a></span> <span class="muted">{{.Edits}}</span></li>{{end}}
   </ol>
 </section>
 {{end}}{{end}}

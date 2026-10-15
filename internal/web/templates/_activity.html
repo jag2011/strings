@@ -9,7 +9,7 @@
   {{range $d.Items}}
   <tr>
     <td class="nowrap muted small">{{date .CreatedAt}}</td>
-    {{if not $d.Mine}}<td>{{with .UserName}}{{.}}{{else}}<span class="muted">—</span>{{end}}</td>{{end}}
+    {{if not $d.Mine}}<td>{{if .UserID}}<a href="{{base}}/u/{{.UserID}}">{{.UserName}}</a>{{else}}<span class="muted">—</span>{{end}}</td>{{end}}
     <td class="key">
       {{if not $d.Lang}}<span class="muted">{{.Lang}}</span> {{end}}
       {{- if .Open}}<a href="{{base}}/t/{{.Lang}}/{{esc .Key}}">{{.Key}}</a>{{else}}{{.Key}}{{end}}

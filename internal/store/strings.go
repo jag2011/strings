@@ -573,18 +573,20 @@ func (s *Store) FilterCounts(ctx context.Context, lang, q string) (map[string]in
 }
 
 type Row struct {
-	Key, Source string
-	Position    int
-	Text        string // empty when missing
-	Origin      string
-	HistoryID   int64
-	UserName    string
-	UpdatedAt   string
-	Has         bool
-	Outdated    bool
-	Approved    bool
-	ApprovedBy  string // name
-	ApprovedAt  string
+	Key, Source  string
+	Position     int
+	Text         string // empty when missing
+	Origin       string
+	HistoryID    int64
+	UserID       int64 // 0 if unknown
+	UserName     string
+	UpdatedAt    string
+	Has          bool
+	Outdated     bool
+	Approved     bool
+	ApprovedBy   string // name
+	ApprovedByID int64
+	ApprovedAt   string
 }
 
 func (r Row) State() string {
@@ -599,8 +601,8 @@ func (r Row) State() string {
 
 const rowSelect = `
 	SELECT s.key, s.text, s.position, coalesce(t.text, ''), coalesce(t.origin, ''), coalesce(t.history_id, 0),
-		coalesce(u.name, ''), coalesce(t.updated_at, ''), t.key IS NOT NULL, coalesce(t.source_hash != s.hash, 0),
-		t.approved_by IS NOT NULL, coalesce(a.name, ''), coalesce(t.approved_at, '')
+		coalesce(t.user_id, 0), coalesce(u.name, ''), coalesce(t.updated_at, ''), t.key IS NOT NULL, coalesce(t.source_hash != s.hash, 0),
+		t.approved_by IS NOT NULL, coalesce(a.name, ''), coalesce(t.approved_by, 0), coalesce(t.approved_at, '')
 	FROM source_strings s
 	LEFT JOIN translations t ON t.key = s.key AND t.lang = ?
 	LEFT JOIN users u ON u.id = t.user_id
@@ -608,8 +610,8 @@ const rowSelect = `
 
 func scanRow(row interface{ Scan(...any) error }) (Row, error) {
 	var r Row
-	err := row.Scan(&r.Key, &r.Source, &r.Position, &r.Text, &r.Origin, &r.HistoryID, &r.UserName, &r.UpdatedAt, &r.Has, &r.Outdated,
-		&r.Approved, &r.ApprovedBy, &r.ApprovedAt)
+	err := row.Scan(&r.Key, &r.Source, &r.Position, &r.Text, &r.Origin, &r.HistoryID, &r.UserID, &r.UserName, &r.UpdatedAt, &r.Has, &r.Outdated,
+		&r.Approved, &r.ApprovedBy, &r.ApprovedByID, &r.ApprovedAt)
 	return r, err
 }
 
@@ -760,6 +762,7 @@ func (s *Store) Export(ctx context.Context, lang string) (*arb.File, error) {
 }
 
 type Contributor struct {
+	ID    int64  `json:"-"`
 	Name  string `json:"name"`
 	Edits int    `json:"edits"`
 }
@@ -793,7 +796,7 @@ func (s *Store) Contributors(ctx context.Context) (map[string][]Contributor, err
 // limit users, most first.
 func (s *Store) TopContributors(ctx context.Context, lang string, limit int) ([]Contributor, error) {
 	rows, err := s.r.QueryContext(ctx, `
-		SELECT u.name, count(*) FROM translations t
+		SELECT u.id, u.name, count(*) FROM translations t
 		JOIN users u ON u.id = t.user_id
 		JOIN source_strings s ON s.key = t.key AND s.removed = 0
 		JOIN languages l ON l.code = t.lang
@@ -806,7 +809,36 @@ func (s *Store) TopContributors(ctx context.Context, lang string, limit int) ([]
 	var out []Contributor
 	for rows.Next() {
 		var c Contributor
-		if err := rows.Scan(&c.Name, &c.Edits); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Edits); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+type LangCount struct {
+	Lang  string
+	Count int
+}
+
+// UserLanguages counts the current translations a user wrote per language,
+// most first, the way TopContributors counts them.
+func (s *Store) UserLanguages(ctx context.Context, userID int64) ([]LangCount, error) {
+	rows, err := s.r.QueryContext(ctx, `
+		SELECT t.lang, count(*) FROM translations t
+		JOIN source_strings s ON s.key = t.key AND s.removed = 0
+		JOIN languages l ON l.code = t.lang
+		WHERE t.user_id = ?
+		GROUP BY t.lang ORDER BY count(*) DESC, t.lang`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LangCount
+	for rows.Next() {
+		var c LangCount
+		if err := rows.Scan(&c.Lang, &c.Count); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -822,6 +854,7 @@ type Activity struct {
 	Prev      string // edits: the text before
 	HasPrev   bool
 	Origin    string // edits: "user" or "machine"
+	UserID    int64
 	UserName  string // empty for approvals removed by a source change
 	CreatedAt string
 	Open      bool // the string can still be opened in the editor
@@ -850,7 +883,7 @@ func (s *Store) Activity(ctx context.Context, lang string, userID int64, offset,
 			FROM approval_log a WHERE `+where+`
 			ORDER BY created_at DESC, src DESC, id DESC LIMIT ? OFFSET ?
 		)
-		SELECT p.kind, p.lang, p.key, coalesce(h.text, ''), p.origin, coalesce(u.name, ''), p.created_at,
+		SELECT p.kind, p.lang, p.key, coalesce(h.text, ''), p.origin, coalesce(p.user_id, 0), coalesce(u.name, ''), p.created_at,
 			coalesce(s.removed = 0 AND s.draft = 0, 0),
 			iif(p.kind = 'edit', (SELECT o.text FROM history o WHERE o.lang = p.lang AND o.key = p.key AND o.id < p.id ORDER BY o.id DESC LIMIT 1), NULL)
 		FROM page p
@@ -866,7 +899,7 @@ func (s *Store) Activity(ctx context.Context, lang string, userID int64, offset,
 	for rows.Next() {
 		var a Activity
 		var prev sql.NullString
-		if err := rows.Scan(&a.Kind, &a.Lang, &a.Key, &a.Text, &a.Origin, &a.UserName, &a.CreatedAt, &a.Open, &prev); err != nil {
+		if err := rows.Scan(&a.Kind, &a.Lang, &a.Key, &a.Text, &a.Origin, &a.UserID, &a.UserName, &a.CreatedAt, &a.Open, &prev); err != nil {
 			return nil, err
 		}
 		a.Prev, a.HasPrev = prev.String, prev.Valid

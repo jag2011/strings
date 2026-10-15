@@ -294,13 +294,43 @@ func (srv *Server) activity(w http.ResponseWriter, r *http.Request, u *store.Use
 	return srv.render(w, r, http.StatusOK, "activity", u, title, d)
 }
 
-// account lists the user's own edits and approvals, like the activity page.
+// account was the "My edits" page, now part of the user's profile.
 func (srv *Server) account(w http.ResponseWriter, r *http.Request, u *store.User) error {
-	d := activityData{Path: "/account", Mine: true}
-	if err := srv.loadActivity(r, &d, u.ID); err != nil {
+	return redirect(w, r, "/u/"+strconv.FormatInt(u.ID, 10), "")
+}
+
+type profileData struct {
+	Profile      *store.User
+	Own          bool // the viewer's own profile
+	ShowEmail    bool // to the user themselves and admins
+	Translations int
+	Approvals    int
+	Langs        []store.LangCount
+	Activity     activityData
+}
+
+// profile shows a user's contributions and recent edits and approvals.
+func (srv *Server) profile(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	p, err := srv.store.User(r.Context(), id)
+	if err != nil {
 		return err
 	}
-	return srv.render(w, r, http.StatusOK, "account", u, "My edits", d)
+	d := profileData{Profile: p, Own: p.ID == u.ID, ShowEmail: p.ID == u.ID || u.IsAdmin()}
+	if d.Langs, err = srv.store.UserLanguages(r.Context(), p.ID); err != nil {
+		return err
+	}
+	for _, l := range d.Langs {
+		d.Translations += l.Count
+	}
+	if _, d.Approvals, err = srv.store.Contributions(r.Context(), p.ID); err != nil {
+		return err
+	}
+	d.Activity = activityData{Path: "/u/" + strconv.FormatInt(p.ID, 10), Mine: true}
+	if err := srv.loadActivity(r, &d.Activity, p.ID); err != nil {
+		return err
+	}
+	return srv.render(w, r, http.StatusOK, "profile", u, p.Name, d)
 }
 
 // loadActivity fills in the requested page of activity.

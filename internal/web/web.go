@@ -118,6 +118,7 @@ func (srv *Server) Handler() http.Handler {
 
 	page("GET /{$}", srv.home)
 	page("GET /account", srv.account)
+	page("GET /u/{id}", srv.profile)
 	page("GET /activity", srv.activity)
 	page("GET /t/{lang}", srv.list)
 	page("GET /t/{lang}/{key}", srv.editor)

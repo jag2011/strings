@@ -14,7 +14,7 @@
   <nav>
     <a href="{{base}}/" {{if eq $.Nav "home"}}aria-current="page"{{end}}>{{template "icon" "languages"}}Languages</a>
     <a href="{{base}}/activity" {{if eq $.Nav "activity"}}aria-current="page"{{end}}>{{template "icon" "activity"}}Activity</a>
-    <a href="{{base}}/account" {{if eq $.Nav "account"}}aria-current="page"{{end}}>{{template "icon" "edits"}}My edits</a>
+    <a href="{{base}}/u/{{.ID}}" {{if and (eq $.Nav "profile") $.Data.Own}}aria-current="page"{{end}}>{{template "icon" "profile"}}Profile</a>
     {{if .IsAdmin}}
     <span class="admin" role="group" aria-label="Admin">
       <a href="{{base}}/admin" {{if eq $.Nav "admin"}}aria-current="page"{{end}}>{{template "icon" "settings"}}Settings</a>

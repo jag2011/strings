@@ -47,15 +47,14 @@
     <td class="nowrap">
       <form id="u{{.ID}}" method="post" action="{{base}}/admin/users/{{.ID}}" class="inline-form"><button class="small">Save</button></form>
       {{$link := or .HasPassword (not .External)}}{{$merge := ne .ID $.User.ID}}
-      {{if or $link $merge}}
       <details class="menu">
         <summary class="button small" title="More actions" aria-label="More actions for {{.Name}}">⋮</summary>
         <div class="menu-items">
+          <a href="{{base}}/u/{{.ID}}">Profile</a>
           {{if $link}}<form method="post" action="{{base}}/admin/users/{{.ID}}/link"><button>{{if .HasPassword}}Reset link{{else}}New invite link{{end}}</button></form>{{end}}
           {{if $merge}}<a href="{{base}}/admin/users/{{.ID}}/merge">Merge into another user…</a>{{end}}
         </div>
       </details>
-      {{end}}
     </td>
   </tr>
   {{end}}

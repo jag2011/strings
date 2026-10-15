@@ -32,11 +32,11 @@
   {{with $d.Warns}}<ul class="warning" role="alert">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
 
   {{if $e.Approved}}
-  <p class="note approved"><span class="approved" aria-hidden="true">✓</span> Approved by {{$e.ApprovedBy}} · {{date $e.ApprovedAt}}.
+  <p class="note approved"><span class="approved" aria-hidden="true">✓</span> Approved by <a href="{{base}}/u/{{$e.ApprovedByID}}">{{$e.ApprovedBy}}</a> · {{date $e.ApprovedAt}}.
     {{if $canApprove}}Uncheck <em>Approved</em> to edit it.{{else}}Only proofreaders and admins can change it.{{end}}</p>
   {{end}}
   <label for="text" class="label">{{langName $d.Lang}}
-    {{if $e.Has}}<span class="muted small">· {{$e.Origin}}{{with $e.UserName}} by {{.}}{{end}} · {{date $e.UpdatedAt}}</span>{{end}}
+    {{if $e.Has}}<span class="muted small">· {{$e.Origin}}{{if $e.UserID}} by <a href="{{base}}/u/{{$e.UserID}}">{{$e.UserName}}</a>{{end}} · {{date $e.UpdatedAt}}</span>{{end}}
   </label>
   <textarea id="text" name="text" lang="{{bcp47 $d.Lang}}" dir="{{dir $d.Lang}}" spellcheck="true" rows="4" autofocus {{if and $e.Approved (or $d.Approved (not $canApprove))}}readonly{{end}}>{{$d.Text}}</textarea>
 
@@ -67,7 +67,7 @@
     <li {{if .Current}}class="current"{{end}}>
       <p class="text" lang="{{bcp47 $d.Lang}}" dir="{{dir $d.Lang}}">{{.Text}}</p>
       <p class="muted small">
-        {{date .CreatedAt}} · {{.Origin}}{{with .UserName}} by {{.}}{{end}}
+        {{date .CreatedAt}} · {{.Origin}}{{if .UserID}} by <a href="{{base}}/u/{{.UserID}}">{{.UserName}}</a>{{end}}
         {{if .ForOldText}}· for an older source text{{end}}
         {{if .Current}}· <strong>current</strong>{{end}}
       </p>

@@ -95,10 +95,47 @@ func (e *env) get(c *http.Client, path string) (*http.Response, string) {
 	return res, string(body)
 }
 
+func TestProfile(t *testing.T) {
+	e := setup(t)
+	admin := e.user("admin@example.com", "admin") // id 1
+	tr := e.user("tr@example.com", "translator")  // id 2
+	ctx := context.Background()
+	e.store.Save(ctx, "de", "hello", "Hallo {name}!", 2, -1, store.KeepApproval)
+
+	if res, _ := e.get(tr, "/account"); res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/u/2" {
+		t.Errorf("/account: %d %s", res.StatusCode, res.Header.Get("Location"))
+	}
+	// Own profile: email, the edit, the nav item marked current.
+	_, body := e.get(tr, "/u/2")
+	for _, want := range []string{"tr@example.com", "Hallo {name}!", `href="/u/2" aria-current="page"`, "<strong>1</strong> string translated"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("own profile misses %q", want)
+		}
+	}
+	// Someone else's: no email for translators, but for admins.
+	_, body = e.get(tr, "/u/1")
+	if strings.Contains(body, "admin@example.com") {
+		t.Error("translator sees another user's email")
+	}
+	if strings.Contains(body, `href="/u/2" aria-current`) {
+		t.Error("Profile marked current on someone else's profile")
+	}
+	if _, body := e.get(admin, "/u/2"); !strings.Contains(body, "tr@example.com") {
+		t.Error("admin doesn't see the email")
+	}
+	if res, _ := e.get(tr, "/u/99"); res.StatusCode != http.StatusNotFound {
+		t.Errorf("missing user: %d", res.StatusCode)
+	}
+	// Names link to profiles.
+	if _, body := e.get(tr, "/t/de/hello"); !strings.Contains(body, `<a href="/u/2">tr</a>`) {
+		t.Error("editor doesn't link the translator")
+	}
+}
+
 func TestPagesRender(t *testing.T) {
 	e := setup(t)
 	c := e.user("admin@example.com", "admin")
-	for _, p := range []string{"/", "/t/de", "/t/de?filter=all&q=hel", "/t/de/hello", "/account", "/admin", "/admin/users", "/export/intl_de.arb"} {
+	for _, p := range []string{"/", "/t/de", "/t/de?filter=all&q=hel", "/t/de/hello", "/u/1", "/admin", "/admin/users", "/export/intl_de.arb"} {
 		res, body := e.get(c, p)
 		if res.StatusCode != 200 {
 			t.Errorf("GET %s: %d\n%s", p, res.StatusCode, body)

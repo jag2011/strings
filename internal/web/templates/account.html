@@ -1,6 +1,0 @@
-{{define "content"}}
-{{$d := .Data}}
-<h1>My edits</h1>
-<p class="muted small">Your edits and approvals as {{.User.Name}} ({{.User.Email}}){{if gt $d.Page 1}} · page {{$d.Page}}{{end}}. Imports aren't listed.</p>
-{{template "activity-table" $d}}
-{{end}}
