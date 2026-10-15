@@ -59,22 +59,37 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 
 /* Header */
 
+/* The middle column lines up with main's content box (1100px minus its padding). */
 .top {
-  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  display: grid; grid-template-columns: 1fr minmax(0, 1068px) 1fr; align-items: center;
   padding: 10px 16px;
   border-bottom: 1px solid var(--line);
   background: var(--surface);
   view-transition-name: top;
 }
-.brand { font-weight: 700; color: var(--text); font-size: 17px; }
+.brand { font-weight: 700; color: var(--text); font-size: 17px; justify-self: start; margin-right: 16px; }
 .brand::before {
   content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 3px;
   background: var(--accent); margin-right: 8px;
 }
-.top nav { display: flex; gap: 4px 14px; flex-wrap: wrap; align-items: center; margin-left: auto; }
+.top nav { display: flex; gap: 4px 14px; flex-wrap: wrap; align-items: center; }
 .top nav a { color: var(--muted); }
 .top nav a[aria-current] { color: var(--text); font-weight: 600; }
-.top nav form { margin: 0; }
+.top > form { justify-self: end; margin: 0 0 0 16px; }
+.top nav a, .top button.link { display: inline-flex; align-items: center; gap: 5px; }
+@media (max-width: 640px) {
+  .top { grid-template-columns: 1fr auto; row-gap: 8px; }
+  .top nav { grid-column: 1 / -1; grid-row: 2; }
+}
+.icon {
+  width: 15px; height: 15px; flex-shrink: 0;
+  fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.top nav .admin { display: inline-flex; align-items: center; gap: 14px; }
+.top nav .admin::before {
+  content: ""; width: 1px; height: 16px; background: var(--line);
+}
 
 /* Messages */
 
