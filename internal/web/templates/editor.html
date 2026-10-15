@@ -1,5 +1,5 @@
 {{define "content"}}
-{{$d := .Data}}{{$e := $d.Entry}}
+{{$d := .Data}}{{$e := $d.Entry}}{{$canApprove := .User.CanApprove}}
 <p class="crumbs"><a href="/">Languages</a> / <a href="{{$d.ListURL}}">{{langName $d.Lang}}</a> /</p>
 <h1 class="key-title">{{$e.Key}}</h1>
 
@@ -31,19 +31,29 @@
   {{with $d.Errors}}<ul class="error" role="alert">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
   {{with $d.Warns}}<ul class="warning" role="alert">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
 
+  {{if $e.Approved}}
+  <p class="note approved"><span class="approved" aria-hidden="true">✓</span> Approved by {{$e.ApprovedBy}} · {{date $e.ApprovedAt}}.
+    {{if $canApprove}}Uncheck <em>Approved</em> to edit it.{{else}}Only proofreaders and admins can change it.{{end}}</p>
+  {{end}}
   <label for="text" class="label">{{langName $d.Lang}}
     {{if $e.Has}}<span class="muted small">· {{$e.Origin}}{{with $e.UserName}} by {{.}}{{end}} · {{date $e.UpdatedAt}}</span>{{end}}
   </label>
-  <textarea id="text" name="text" lang="{{bcp47 $d.Lang}}" dir="{{dir $d.Lang}}" spellcheck="true" rows="4" autofocus>{{$d.Text}}</textarea>
+  <textarea id="text" name="text" lang="{{bcp47 $d.Lang}}" dir="{{dir $d.Lang}}" spellcheck="true" rows="4" autofocus {{if and $e.Approved (or $d.Approved (not $canApprove))}}readonly{{end}}>{{$d.Text}}</textarea>
 
   <div class="actions">
+    {{if or $canApprove (not $e.Approved)}}
     {{if and $d.Warns (not $d.Errors)}}
     <button class="primary" name="force" value="1">Save anyway</button>
     {{else}}
     <button class="primary" name="action" value="next" title="Ctrl+Enter">Save &amp; next</button>
     <button name="action" value="stay">Save</button>
     {{end}}
+    {{if $canApprove}}
+    <input type="hidden" name="was_approved" value="{{if $e.Approved}}1{{end}}">
+    <label class="check approve"><input type="checkbox" name="approved" value="1" {{if $d.Approved}}checked{{end}} data-approve> Approved</label>
+    {{end}}
     <button type="button" data-copy-source hidden>Copy source</button>
+    {{end}}
     {{with $d.NextKey}}<a class="skip" href="/t/{{$d.Lang}}/{{esc .}}{{query "filter" $d.Filter "q" $d.Q}}">Skip →</a>{{end}}
   </div>
   <p class="muted small hint" hidden data-hint><kbd>Ctrl</kbd>+<kbd>Enter</kbd> saves and opens the next string.</p>
@@ -61,7 +71,7 @@
         {{if .ForOldText}}· for an older source text{{end}}
         {{if .Current}}· <strong>current</strong>{{end}}
       </p>
-      {{if not .Current}}
+      {{if not (or .Current $e.Approved)}}
       <form method="post" action="/t/{{$d.Lang}}/{{esc $e.Key}}/revert/{{.ID}}">
         <input type="hidden" name="filter" value="{{$d.Filter}}">
         <input type="hidden" name="q" value="{{$d.Q}}">

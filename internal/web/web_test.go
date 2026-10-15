@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -165,6 +166,65 @@ func TestTranslateFlow(t *testing.T) {
 	// Translators can't open admin pages.
 	if res, _ := e.get(c, "/admin"); res.StatusCode != http.StatusForbidden {
 		t.Errorf("admin as translator: %d", res.StatusCode)
+	}
+}
+
+func TestApprovalFlow(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	tr := e.user("tr@example.com", "translator")
+	pr := e.user("pr@example.com", "proofreader")
+	approved := func() bool {
+		en, _ := e.store.Entry(ctx, "de", "bye")
+		return en.Approved
+	}
+	base := func() string {
+		en, _ := e.store.Entry(ctx, "de", "bye")
+		return fmt.Sprint(en.HistoryID)
+	}
+
+	// Translators can't approve; the checkbox is ignored.
+	if res := e.post(tr, "/t/de/bye", url.Values{"text": {"Tschüss"}, "base": {"0"}, "approved": {"1"}}); res.StatusCode != http.StatusSeeOther || approved() {
+		t.Fatalf("translator approve: %d %v", res.StatusCode, approved())
+	}
+	if _, body := e.get(tr, "/t/de/bye"); strings.Contains(body, `name="approved"`) {
+		t.Error("translators get no checkbox")
+	}
+	// Proofreaders can, without changing the text.
+	if res := e.post(pr, "/t/de/bye", url.Values{"text": {"Tschüss"}, "base": {base()}, "approved": {"1"}, "action": {"stay"}}); res.StatusCode != http.StatusSeeOther || !approved() {
+		t.Fatalf("approve: %d %v", res.StatusCode, approved())
+	}
+	if _, body := e.get(tr, "/t/de?filter=all"); !strings.Contains(body, `aria-label="approved"`) {
+		t.Error("list shows no checkmark")
+	}
+	if _, body := e.get(tr, "/t/de?filter=unapproved"); strings.Contains(body, `id="bye"`) {
+		t.Error("approved string in the unapproved filter")
+	}
+
+	// Now translators can't edit it.
+	_, body := e.get(tr, "/t/de/bye")
+	if !strings.Contains(body, "readonly") || strings.Contains(body, "Save &amp; next") {
+		t.Error("translator editor should be read-only")
+	}
+	if res := e.post(tr, "/t/de/bye", url.Values{"text": {"Ciao"}, "base": {base()}}); res.StatusCode != http.StatusConflict {
+		t.Errorf("translator edit approved: %d", res.StatusCode)
+	}
+	// A proofreader whose editor didn't show the approval doesn't undo it.
+	if res := e.post(pr, "/t/de/bye", url.Values{"text": {"Ciao"}, "base": {base()}}); res.StatusCode != http.StatusConflict || !approved() {
+		t.Errorf("stale proofreader edit: %d", res.StatusCode)
+	}
+	// Unchecking removes the approval, and the text can change with it.
+	if res := e.post(pr, "/t/de/bye", url.Values{"text": {"Ciao"}, "base": {base()}, "was_approved": {"1"}, "action": {"stay"}}); res.StatusCode != http.StatusSeeOther || approved() {
+		t.Fatalf("unapprove: %d %v", res.StatusCode, approved())
+	}
+	if en, _ := e.store.Entry(ctx, "de", "bye"); en.Text != "Ciao" {
+		t.Errorf("text %q", en.Text)
+	}
+
+	// Admins can make proofreaders.
+	ad := e.user("ad@example.com", "admin")
+	if res := e.post(ad, "/admin/users", url.Values{"email": {"p2@example.com"}, "name": {"P"}, "role": {"proofreader"}}); res.StatusCode != http.StatusOK {
+		t.Errorf("create proofreader: %d", res.StatusCode)
 	}
 }
 

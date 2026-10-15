@@ -71,6 +71,7 @@ type editorData struct {
 	Description     string
 	Placeholders    []arb.Placeholder
 	Text            string // textarea content
+	Approved        bool   // checkbox state, for proofreaders and admins
 	Base            int64  // history id the form is based on
 	Errors, Warns   []string
 	Problems        []string // issues of the current text, shown when opening the editor
@@ -87,7 +88,7 @@ func (srv *Server) editorState(r *http.Request, lang, key string) (*editorData, 
 	if err != nil {
 		return nil, err
 	}
-	d := &editorData{Lang: lang, Entry: e, Text: e.Text, Base: e.HistoryID}
+	d := &editorData{Lang: lang, Entry: e, Text: e.Text, Base: e.HistoryID, Approved: e.Approved}
 	d.Filter, d.Q = r.FormValue("filter"), r.FormValue("q")
 	if !slices.Contains(store.Filters, d.Filter) {
 		d.Filter = store.FilterTodo
@@ -149,20 +150,51 @@ func (srv *Server) save(w http.ResponseWriter, r *http.Request, u *store.User) e
 	d.Text, d.Base = text, base
 	title := d.Entry.Key + " · " + langName(lang)
 
-	d.Errors, d.Warns = arb.Check(d.Entry.Source, text)
-	if len(d.Errors) > 0 || (len(d.Warns) > 0 && r.PostFormValue("force") == "") {
-		return srv.render(w, r, http.StatusUnprocessableEntity, "editor", u, title, d)
+	// The form says whether the string was approved when it was opened, so a
+	// proofreader doesn't undo an approval made in the meantime.
+	approval := store.KeepApproval
+	if u.CanApprove() {
+		was := r.PostFormValue("was_approved") == "1"
+		d.Approved = r.PostFormValue("approved") == "1"
+		switch {
+		case d.Approved:
+			approval = store.Approve
+		case was:
+			approval = store.Unapprove
+		}
 	}
-	saved, err := srv.store.Save(r.Context(), lang, key, text, u.ID, base)
+
+	// Only removing an approval needs no checks.
+	if approval != store.Unapprove || text != d.Entry.Text {
+		d.Errors, d.Warns = arb.Check(d.Entry.Source, text)
+		if len(d.Errors) > 0 || (len(d.Warns) > 0 && r.PostFormValue("force") == "") {
+			return srv.render(w, r, http.StatusUnprocessableEntity, "editor", u, title, d)
+		}
+	}
+	saved, err := srv.store.Save(r.Context(), lang, key, text, u.ID, base, approval)
 	if errors.Is(err, store.ErrConflict) {
 		d.Conflict, d.Base, d.Warns = true, d.Entry.HistoryID, nil
+		return srv.render(w, r, http.StatusConflict, "editor", u, title, d)
+	}
+	if errors.Is(err, store.ErrApproved) {
+		// Approved since the editor was opened.
+		if d, err = srv.editorState(r, lang, key); err != nil {
+			return err
+		}
+		d.Text, d.Errors = text, []string{"This translation has been approved in the meantime. Only proofreaders and admins can change it."}
 		return srv.render(w, r, http.StatusConflict, "editor", u, title, d)
 	}
 	if err != nil {
 		return err
 	}
 	flash := ""
-	if saved {
+	switch {
+	case !saved:
+	case approval == store.Approve:
+		flash = "Approved " + key + "."
+	case approval == store.Unapprove:
+		flash = "Removed the approval of " + key + "."
+	default:
 		flash = "Saved " + key + "."
 	}
 	if r.PostFormValue("action") == "stay" {

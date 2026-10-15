@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -27,7 +28,14 @@ type User struct {
 	CreatedAt   string
 }
 
+// Roles: proofreaders do what translators do and also approve translations.
+// Admins can do everything.
+var Roles = []string{"translator", "proofreader", "admin"}
+
 func (u *User) IsAdmin() bool { return u != nil && u.Role == "admin" }
+
+// CanApprove says whether u may approve translations and remove approvals.
+func (u *User) CanApprove() bool { return u != nil && (u.Role == "admin" || u.Role == "proofreader") }
 
 const userCols = "id, email, name, role, disabled, password_hash IS NOT NULL, created_at"
 
@@ -49,7 +57,7 @@ func (s *Store) CreateUser(ctx context.Context, email, name, role string) (*User
 	if name == "" {
 		return nil, fmt.Errorf("a name is required")
 	}
-	if role != "admin" && role != "translator" {
+	if !slices.Contains(Roles, role) {
 		return nil, fmt.Errorf("unknown role %q", role)
 	}
 	row := s.w.QueryRowContext(ctx,
@@ -83,7 +91,7 @@ func (s *Store) Users(ctx context.Context) ([]*User, error) {
 }
 
 func (s *Store) UpdateUser(ctx context.Context, id int64, name, role string, disabled bool) error {
-	if role != "admin" && role != "translator" {
+	if !slices.Contains(Roles, role) {
 		return fmt.Errorf("unknown role %q", role)
 	}
 	if strings.TrimSpace(name) == "" {

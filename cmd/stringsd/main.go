@@ -24,7 +24,7 @@ const usage = `stringsd: the strings server, minimalistic string management
 
 Usage:
   stringsd serve  [-db strings.db] [-addr :8080]
-  stringsd user   [-db strings.db] [-admin] [-url http://localhost:8080] <email> <name>
+  stringsd user   [-db strings.db] [-admin | -proofreader] [-url http://localhost:8080] <email> <name>
   stringsd import [-db strings.db] <file.arb>...
   stringsd export [-db strings.db] [-out .]
   stringsd token  [-db strings.db] <name>
@@ -51,13 +51,20 @@ func main() {
 		err = serve(*dbPath, *addr)
 	case "user":
 		admin := fs.Bool("admin", false, "make the user an admin")
+		proofreader := fs.Bool("proofreader", false, "make the user a proofreader, who can approve translations")
 		base := fs.String("url", "http://localhost:8080", "public URL, for the invite link")
 		fs.Parse(args)
-		if fs.NArg() != 2 {
+		if fs.NArg() != 2 || (*admin && *proofreader) {
 			fs.Usage()
 			os.Exit(2)
 		}
-		err = addUser(*dbPath, fs.Arg(0), fs.Arg(1), *admin, *base)
+		role := "translator"
+		if *admin {
+			role = "admin"
+		} else if *proofreader {
+			role = "proofreader"
+		}
+		err = addUser(*dbPath, fs.Arg(0), fs.Arg(1), role, *base)
 	case "import":
 		fs.Parse(args)
 		err = importFiles(*dbPath, fs.Args())
@@ -134,11 +141,7 @@ func serve(dbPath, addr string) error {
 	})
 }
 
-func addUser(dbPath, email, name string, admin bool, base string) error {
-	role := "translator"
-	if admin {
-		role = "admin"
-	}
+func addUser(dbPath, email, name, role, base string) error {
 	return withStore(dbPath, func(s *store.Store) error {
 		ctx := context.Background()
 		u, err := s.CreateUser(ctx, email, name, role)

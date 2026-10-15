@@ -17,7 +17,7 @@
 {{if $d.Rows}}{{with index $d.Rows 0}} · <a href="/t/{{$d.Lang}}/{{esc .Key}}{{query "filter" $d.Filter "q" $d.Q}}">Start translating →</a>{{end}}{{end}}</p>
 
 {{if not $d.Rows}}
-  <p class="empty">{{if eq $d.Filter "todo"}}All done here. Nothing missing or outdated.{{else}}No strings match.{{end}}</p>
+  <p class="empty">{{if eq $d.Filter "todo"}}All done here. Nothing missing or outdated.{{else if eq $d.Filter "unapproved"}}Nothing waiting for approval.{{else}}No strings match.{{end}}</p>
 {{else}}
 <table class="strings">
   <thead><tr><th>Key</th><th>Source</th><th>Translation</th></tr></thead>
@@ -29,6 +29,7 @@
     <td lang="{{bcp47 $d.Lang}}" dir="{{dir $d.Lang}}">
       {{- if .Has}}<span class="text">{{.Text}}</span>{{else}}<span class="tag missing">missing</span>{{end}}
       {{- if .Outdated}} <span class="tag outdated">outdated</span>{{end -}}
+      {{- if .Approved}} <span class="approved" title="Approved by {{.ApprovedBy}}" role="img" aria-label="approved">✓</span>{{end -}}
     </td>
   </tr>
   {{end}}

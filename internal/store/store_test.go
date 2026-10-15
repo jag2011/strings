@@ -37,6 +37,14 @@ func entry(t *testing.T, s *Store, lang, key string) *Entry {
 	return e
 }
 
+func TestForeignKeysAfterMigrate(t *testing.T) {
+	s := open(t)
+	var on int
+	if err := s.w.QueryRow("PRAGMA foreign_keys").Scan(&on); err != nil || on != 1 {
+		t.Fatal("foreign keys off after migrating", err)
+	}
+}
+
 func TestSourceAndOutdated(t *testing.T) {
 	s, ctx := open(t), context.Background()
 	if _, err := s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana {n}", "c": "Cherry"}`), nil); err != nil {
@@ -74,7 +82,7 @@ func TestSourceAndOutdated(t *testing.T) {
 
 	// Saving the unchanged text marks it up to date.
 	e := entry(t, s, "de", "a")
-	saved, err := s.Save(ctx, "de", "a", "Apfel", 0, e.HistoryID)
+	saved, err := s.Save(ctx, "de", "a", "Apfel", 0, e.HistoryID, KeepApproval)
 	if err != nil || !saved {
 		t.Fatal(saved, err)
 	}
@@ -82,7 +90,7 @@ func TestSourceAndOutdated(t *testing.T) {
 		t.Error("a should be up to date")
 	}
 	// Saving the same text again does nothing.
-	if saved, _ := s.Save(ctx, "de", "a", "Apfel", 0, -1); saved {
+	if saved, _ := s.Save(ctx, "de", "a", "Apfel", 0, -1, KeepApproval); saved {
 		t.Error("expected no-op")
 	}
 }
@@ -94,15 +102,15 @@ func TestSaveConflictAndRevert(t *testing.T) {
 	u1, _ := s.CreateUser(ctx, "one@example.com", "One", "translator")
 	u2, _ := s.CreateUser(ctx, "two@example.com", "Two", "translator")
 
-	if _, err := s.Save(ctx, "de", "a", "Apfel", u1.ID, 0); err != nil {
+	if _, err := s.Save(ctx, "de", "a", "Apfel", u1.ID, 0, KeepApproval); err != nil {
 		t.Fatal(err)
 	}
 	first := entry(t, s, "de", "a").HistoryID
 	// u2 opened the editor before u1 saved.
-	if _, err := s.Save(ctx, "de", "a", "Äpfel", u2.ID, 0); !errors.Is(err, ErrConflict) {
+	if _, err := s.Save(ctx, "de", "a", "Äpfel", u2.ID, 0, KeepApproval); !errors.Is(err, ErrConflict) {
 		t.Fatalf("expected conflict, got %v", err)
 	}
-	if _, err := s.Save(ctx, "de", "a", "Äpfel", u2.ID, first); err != nil {
+	if _, err := s.Save(ctx, "de", "a", "Äpfel", u2.ID, first, KeepApproval); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Revert(ctx, "de", "a", first, u2.ID); err != nil {
@@ -166,7 +174,7 @@ func TestDrafts(t *testing.T) {
 	if _, err := s.Entry(ctx, "de", "b"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("entry of draft: %v", err)
 	}
-	if _, err := s.Save(ctx, "de", "b", "x", 0, -1); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Save(ctx, "de", "b", "x", 0, -1, KeepApproval); !errors.Is(err, ErrNotFound) {
 		t.Errorf("save of draft: %v", err)
 	}
 
@@ -225,6 +233,74 @@ func TestSourceDecisions(t *testing.T) {
 	res, _ = s.ImportSource(ctx, parse(t, `{"a": "The cat", "@a": {"description": "Pet"}, "b": "Wolf", "c": "Eagle", "d": "Fish", "e": "New"}`), nil)
 	if res.Revision != 3 || res.Changed != 0 {
 		t.Errorf("metadata change: %+v", res)
+	}
+}
+
+func TestApproval(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana"}`), nil)
+	s.ImportTranslations(ctx, "de", parse(t, `{"a": "Apfel", "b": "Banane"}`))
+	p, _ := s.CreateUser(ctx, "p@example.com", "Petra", "proofreader")
+	if !p.CanApprove() {
+		t.Fatal("proofreaders approve")
+	}
+
+	saved, err := s.Save(ctx, "de", "a", "Apfel", p.ID, entry(t, s, "de", "a").HistoryID, Approve)
+	if err != nil || !saved {
+		t.Fatal(saved, err)
+	}
+	if e := entry(t, s, "de", "a"); !e.Approved || e.ApprovedBy != "Petra" || e.ApprovedAt == "" || len(e.History) != 1 {
+		t.Fatalf("approved: %+v", e)
+	}
+	if saved, err := s.Save(ctx, "de", "a", "Apfel", p.ID, -1, Approve); err != nil || saved {
+		t.Error("approving again changes nothing", saved, err)
+	}
+
+	// Approved translations can't be changed, not even by restoring or importing.
+	if _, err := s.Save(ctx, "de", "a", "Äpfel", 0, -1, KeepApproval); !errors.Is(err, ErrApproved) {
+		t.Errorf("edit approved: %v", err)
+	}
+	if saved, err := s.Save(ctx, "de", "a", "Apfel", 0, -1, KeepApproval); err != nil || saved {
+		t.Error("unchanged save of approved text", saved, err)
+	}
+	if res, _ := s.ImportTranslations(ctx, "de", parse(t, `{"a": "Äpfel", "b": "Bananen"}`)); len(res.Skipped) != 1 || res.Updated != 1 {
+		t.Errorf("import over approved: %+v", res)
+	}
+	if st, _ := s.Stats(ctx); st[0].Approved != 1 || st[0].Done != 2 {
+		t.Errorf("stats: %+v", st)
+	}
+	if rows, n, _ := s.List(ctx, "de", FilterUnapproved, "", 0, 10); n != 1 || rows[0].Key != "b" {
+		t.Errorf("unapproved filter: %+v", rows)
+	}
+
+	// Removing the approval and editing in one save.
+	if _, err := s.Save(ctx, "de", "a", "Äpfel", p.ID, -1, Unapprove); err != nil {
+		t.Fatal(err)
+	}
+	if e := entry(t, s, "de", "a"); e.Approved || e.Text != "Äpfel" {
+		t.Errorf("unapproved: %+v", e.Row)
+	}
+	// Proofreaders can change approved text and keep it approved.
+	s.Save(ctx, "de", "a", "Äpfel", p.ID, -1, Approve)
+	if saved, err := s.Save(ctx, "de", "a", "Apfel", p.ID, -1, Approve); err != nil || !saved {
+		t.Fatal(saved, err)
+	}
+	e := entry(t, s, "de", "a")
+	if !e.Approved || e.Text != "Apfel" || len(e.History) != 3 {
+		t.Fatalf("edited approved: %+v", e)
+	}
+	if err := s.Revert(ctx, "de", "a", e.History[1].ID, 0); !errors.Is(err, ErrApproved) {
+		t.Errorf("revert approved: %v", err)
+	}
+
+	// A kept source change keeps the approval; outdating removes it.
+	s.Save(ctx, "de", "b", "Bananen", p.ID, -1, Approve)
+	s.ImportSource(ctx, parse(t, `{"a": "Apples", "b": "Bananas"}`), map[string]string{"a": KeepTranslations})
+	if e := entry(t, s, "de", "a"); !e.Approved || e.Outdated {
+		t.Errorf("kept: %+v", e.Row)
+	}
+	if e := entry(t, s, "de", "b"); e.Approved || !e.Outdated {
+		t.Errorf("outdated: %+v", e.Row)
 	}
 }
 

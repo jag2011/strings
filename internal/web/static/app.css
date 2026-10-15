@@ -84,6 +84,7 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 .flash { background: var(--tint); }
 .error { background: color-mix(in srgb, var(--missing) 14%, transparent); }
 .warning, .note.outdated { background: color-mix(in srgb, var(--outdated) 16%, transparent); }
+.note.approved { background: color-mix(in srgb, var(--done) 14%, transparent); }
 ul.error, ul.warning { padding-left: 32px; }
 .error p { margin: 4px 0; }
 .error-text { color: var(--missing); }
@@ -150,6 +151,8 @@ form.grid .span { grid-column: 1 / -1; }
 }
 .tag.missing { background: color-mix(in srgb, var(--missing) 16%, transparent); color: var(--missing); }
 .tag.outdated { background: color-mix(in srgb, var(--outdated) 18%, transparent); color: var(--outdated); }
+.tag.approved { background: color-mix(in srgb, var(--done) 16%, transparent); color: var(--done); }
+.approved { color: var(--done); font-weight: 700; }
 
 /* String list */
 
@@ -203,6 +206,8 @@ textarea {
 }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
 .actions .skip { margin-left: auto; }
+.actions .approve { margin-left: 8px; }
+textarea[readonly] { color: var(--muted); }
 .hint { margin-top: 8px; }
 
 .history ol { list-style: none; padding: 0; margin: 0; border-left: 2px solid var(--line); }

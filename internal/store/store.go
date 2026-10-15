@@ -60,11 +60,23 @@ func (s *Store) Close() error {
 }
 
 // migrate applies schema/NNN_*.sql files newer than PRAGMA user_version.
+// Foreign keys are off while migrating, so migrations can rebuild tables
+// (sqlite.org/lang_altertable.html); violations are checked before commit.
 func (s *Store) migrate() error {
-	var version int
-	if err := s.w.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+	ctx := context.Background()
+	c, err := s.w.Conn(ctx) // PRAGMA foreign_keys is per connection
+	if err != nil {
 		return err
 	}
+	defer c.Close()
+	var version int
+	if err := c.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	if _, err := c.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		return err
+	}
+	defer c.ExecContext(ctx, "PRAGMA foreign_keys = ON")
 	files, _ := fs.Glob(schemaFS, "schema/*.sql")
 	sort.Strings(files)
 	for _, f := range files {
@@ -76,23 +88,36 @@ func (s *Store) migrate() error {
 			continue
 		}
 		body, _ := schemaFS.ReadFile(f)
-		tx, err := s.w.Begin()
+		tx, err := c.BeginTx(ctx, nil)
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(string(body)); err != nil {
+		if err := migrateTx(ctx, tx, string(body), n); err != nil {
 			tx.Rollback()
 			return fmt.Errorf("migration %s: %w", f, err)
-		}
-		if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", n)); err != nil {
-			tx.Rollback()
-			return err
 		}
 		if err := tx.Commit(); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func migrateTx(ctx context.Context, tx *sql.Tx, body string, version int) error {
+	if _, err := tx.ExecContext(ctx, body); err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		return err
+	}
+	violated := rows.Next()
+	rows.Close()
+	if violated {
+		return fmt.Errorf("foreign key violation")
+	}
+	_, err = tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", version))
+	return err
 }
 
 func (s *Store) tx(ctx context.Context, fn func(*sql.Tx) error) error {

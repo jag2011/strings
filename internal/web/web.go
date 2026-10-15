@@ -198,6 +198,8 @@ func (srv *Server) renderError(w http.ResponseWriter, r *http.Request, u *store.
 	var he httpError
 	if errors.Is(err, store.ErrNotFound) {
 		he = httpError{http.StatusNotFound, "Not found."}
+	} else if errors.Is(err, store.ErrApproved) {
+		he = httpError{http.StatusConflict, "This translation is approved. Remove the approval first."}
 	} else if !errors.As(err, &he) {
 		log.Printf("%s %s: %v", r.Method, r.URL.Path, err)
 		he = httpError{http.StatusInternalServerError, "Something went wrong."}

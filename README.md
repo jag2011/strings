@@ -19,7 +19,11 @@ translated ARBs. One binary, one SQLite file, no JavaScript framework.
 - **ICU-aware validation.** Broken braces, unknown placeholders and lost
   plurals are caught before saving. Language-specific plural categories are
   fine.
-- **Simple accounts.** Admins invite translators with a link. No email server.
+- **Proofreading.** Proofreaders tick *Approved* on translations they've
+  checked. Approved strings get a checkmark and are locked until a
+  proofreader or admin removes the approval.
+- **Simple accounts.** Admins invite translators and proofreaders with a
+  link. No email server.
 - **HTTP API** for syncing from CI with `curl`.
 - **Small.** Go standard library plus a pure-Go SQLite driver. Works without
   JavaScript; a few lines of it add keyboard shortcuts.
@@ -60,7 +64,7 @@ environment variable).
 | Command | Does |
 |---|---|
 | `serve [-addr :8080]` | Runs the web app and API (`STRINGS_ADDR`) |
-| `user [-admin] [-url …] <email> <name>` | Creates a user and prints an invite link |
+| `user [-admin \| -proofreader] [-url …] <email> <name>` | Creates a user and prints an invite link |
 | `import <files…>` | Imports ARB files |
 | `export [-out dir]` | Writes one ARB per target language |
 | `token <name>` | Creates an API token |
@@ -84,10 +88,10 @@ done
 | Endpoint | |
 |---|---|
 | `PUT /api/v1/source` | Body: source ARB. Returns the new revision and added, changed, removed and unchanged counts. Translations of changed strings become outdated |
-| `PUT /api/v1/translations/{lang}` | Body: ARB. Seeds a language; never overwrites edits made in strings |
+| `PUT /api/v1/translations/{lang}` | Body: ARB. Seeds a language; never overwrites edits or approvals made in strings |
 | `GET /api/v1/arb/{prefix}{lang}.arb` | One language |
 | `GET /api/v1/arb.zip` | All target languages |
-| `GET /api/v1/stats` | Done, outdated and missing per language |
+| `GET /api/v1/stats` | Done, outdated, missing and approved per language |
 | `GET /api/v1/contributors` | Per language: contributor names and number of strings, for credits |
 
 The source file is never exported. It belongs to your repository.
@@ -96,6 +100,10 @@ The source file is never exported. It belongs to your repository.
 
 - **Missing** translations are left out of exports, so your app falls back to
   the source language.
+- **Approved** translations can only be changed after a proofreader or admin
+  unchecks *Approved*. Proofreaders find the rest under the *unapproved*
+  filter. When the source text changes, the approval goes with the outdated
+  flag, unless the change is kept in the import review.
 - **Outdated** translations (the source text changed since) are exported and
   flagged. Saving one, even unchanged, marks it up to date.
 - **Validation** follows ICU MessageFormat as Flutter uses it (apostrophes are

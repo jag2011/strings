@@ -484,7 +484,7 @@ func (srv *Server) apiStats(w http.ResponseWriter, r *http.Request) {
 	}
 	out := map[string]map[string]int{}
 	for _, s := range stats {
-		out[s.Lang] = map[string]int{"total": s.Total, "done": s.Done, "outdated": s.Outdated, "missing": s.Missing, "human": s.Human}
+		out[s.Lang] = map[string]int{"total": s.Total, "done": s.Done, "outdated": s.Outdated, "missing": s.Missing, "human": s.Human, "approved": s.Approved}
 	}
 	writeJSON(w, http.StatusOK, out)
 }

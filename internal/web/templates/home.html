@@ -18,6 +18,7 @@
       </span>
       <span class="counts">
         <strong>{{.Percent}}%</strong>
+        {{if .Approved}}<span class="tag approved">{{.Approved}} approved</span>{{end}}
         {{if .Outdated}}<span class="tag outdated">{{.Outdated}} outdated</span>{{end}}
         {{if .Missing}}<span class="tag missing">{{.Missing}} missing</span>{{end}}
       </span>

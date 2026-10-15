@@ -120,6 +120,13 @@ errors and report those with warnings.
 
 Schema: [`internal/store/schema/001_init.sql`](../internal/store/schema/001_init.sql).
 
+- **Approved** means `translations.approved_by` is set. Approved translations
+  can't be saved, restored or overwritten by imports until a proofreader or
+  admin removes the approval, which they can do while saving a new text. A
+  proofreader changing approved text approves it again. A source import that
+  outdates a translation removes its approval; *keep* leaves it. The editor
+  form sends whether the string was approved when opened, so a proofreader
+  doesn't silently undo an approval made in the meantime.
 - **Outdated** means `translations.source_hash != source_strings.hash`. There is
   no status column to keep in sync.
 - **Saving** inserts a `history` row and updates `translations` in one
@@ -138,6 +145,8 @@ Schema: [`internal/store/schema/001_init.sql`](../internal/store/schema/001_init
 - Sessions: 32 random bytes in an `HttpOnly`, `SameSite=Lax` cookie (`Secure`
   behind HTTPS), stored as SHA-256, 30 days sliding. Disabling a user ends
   their sessions.
+- Roles: *translators* translate, *proofreaders* also approve translations
+  and remove approvals, *admins* can do everything.
 - Failed logins are limited to 10 per IP and email in 15 minutes.
 - API tokens (`st_…`) are stored as SHA-256 and give full API access.
 

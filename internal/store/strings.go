@@ -179,7 +179,9 @@ func (s *Store) ImportSource(ctx context.Context, f *arb.File, decide map[string
 				res.Cleared++
 				_, err = tx.ExecContext(ctx, "DELETE FROM translations WHERE key = ?", c.Key)
 			default:
+				// Approval was for the old source text.
 				res.Outdated++
+				_, err = tx.ExecContext(ctx, "UPDATE translations SET approved_by = NULL, approved_at = NULL WHERE key = ?", c.Key)
 			}
 			if err != nil {
 				return err
@@ -207,7 +209,7 @@ func boolSetting(b bool) string {
 
 type TranslationResult struct {
 	Added, Updated, Unchanged int
-	Skipped                   []string // keys with edits made in strings, which an import never overwrites
+	Skipped                   []string // keys edited or approved in strings, which an import never overwrites
 	Unknown                   []string // keys not in the source
 	Invalid                   []string // keys failing validation, e.g. broken braces; not imported
 	Empty                     []string // empty translations of non-empty source text; left missing
@@ -215,8 +217,8 @@ type TranslationResult struct {
 }
 
 // ImportTranslations seeds a language from an existing ARB file. Imported
-// texts count as up to date with the current source. Texts edited in strings
-// are never overwritten.
+// texts count as up to date with the current source. Texts edited or approved
+// in strings are never overwritten.
 func (s *Store) ImportTranslations(ctx context.Context, lang string, f *arb.File) (TranslationResult, error) {
 	var res TranslationResult
 	if !arb.ValidLocale(lang) {
@@ -248,7 +250,9 @@ func (s *Store) ImportTranslations(ctx context.Context, lang string, f *arb.File
 				res.Warned = append(res.Warned, m.Key)
 			}
 			var curText, curOrigin string
-			err = tx.QueryRowContext(ctx, "SELECT text, origin FROM translations WHERE lang = ? AND key = ?", lang, m.Key).Scan(&curText, &curOrigin)
+			var approved bool
+			err = tx.QueryRowContext(ctx, "SELECT text, origin, approved_by IS NOT NULL FROM translations WHERE lang = ? AND key = ?",
+				lang, m.Key).Scan(&curText, &curOrigin, &approved)
 			switch {
 			case errors.Is(err, sql.ErrNoRows):
 				res.Added++
@@ -257,7 +261,7 @@ func (s *Store) ImportTranslations(ctx context.Context, lang string, f *arb.File
 			case curText == m.Text:
 				res.Unchanged++
 				continue
-			case curOrigin != "import":
+			case curOrigin != "import" || approved:
 				res.Skipped = append(res.Skipped, m.Key)
 				continue
 			default:
@@ -293,11 +297,24 @@ func write(ctx context.Context, tx *sql.Tx, lang, key, text, hash, origin string
 // ErrConflict means the translation changed since the editor was opened.
 var ErrConflict = errors.New("changed by someone else in the meantime")
 
+// ErrApproved means the translation is approved and can't be changed.
+var ErrApproved = errors.New("approved translations can't be changed")
+
+// Approval says what Save does with the approval of a translation.
+type Approval int
+
+const (
+	KeepApproval Approval = iota // an approved translation can't be changed
+	Approve                      // save and approve; changing approved text approves it again
+	Unapprove                    // remove the approval and save
+)
+
 // Save stores a user's translation. base is the history id the user's editor
 // showed (0 if there was none); a mismatch returns ErrConflict. base < 0
 // skips the check. Saving the unchanged text of an outdated translation marks
-// it up to date.
-func (s *Store) Save(ctx context.Context, lang, key, text string, userID, base int64) (saved bool, err error) {
+// it up to date. Changing an approved translation without Unapprove returns
+// ErrApproved. saved reports whether the text or the approval changed.
+func (s *Store) Save(ctx context.Context, lang, key, text string, userID, base int64, approval Approval) (saved bool, err error) {
 	err = s.tx(ctx, func(tx *sql.Tx) error {
 		var hash string
 		err := tx.QueryRowContext(ctx, "SELECT hash FROM source_strings WHERE key = ? AND removed = 0 AND draft = 0", key).Scan(&hash)
@@ -308,19 +325,41 @@ func (s *Store) Save(ctx context.Context, lang, key, text string, userID, base i
 		}
 		var curID int64
 		var curText, curHash string
-		err = tx.QueryRowContext(ctx, "SELECT history_id, text, source_hash FROM translations WHERE lang = ? AND key = ?",
-			lang, key).Scan(&curID, &curText, &curHash)
+		var approved bool
+		err = tx.QueryRowContext(ctx, "SELECT history_id, text, source_hash, approved_by IS NOT NULL FROM translations WHERE lang = ? AND key = ?",
+			lang, key).Scan(&curID, &curText, &curHash, &approved)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 		if base >= 0 && curID != base {
 			return ErrConflict
 		}
-		if curID != 0 && curText == text && curHash == hash {
+		unchanged := curID != 0 && curText == text && curHash == hash
+		if approved && (unchanged && approval != Unapprove) {
 			return nil
 		}
-		saved = true
-		return write(ctx, tx, lang, key, text, hash, "user", userID)
+		if approved && approval == KeepApproval {
+			return ErrApproved
+		}
+		if approved && approval == Unapprove {
+			saved = true
+			if _, err := tx.ExecContext(ctx, "UPDATE translations SET approved_by = NULL, approved_at = NULL WHERE lang = ? AND key = ?", lang, key); err != nil {
+				return err
+			}
+		}
+		if !unchanged {
+			saved = true
+			if err := write(ctx, tx, lang, key, text, hash, "user", userID); err != nil {
+				return err
+			}
+		}
+		if approval == Approve && (!approved || !unchanged) {
+			saved = true
+			_, err := tx.ExecContext(ctx, "UPDATE translations SET approved_by = ?, approved_at = datetime('now') WHERE lang = ? AND key = ?",
+				userID, lang, key)
+			return err
+		}
+		return nil
 	})
 	return saved, err
 }
@@ -334,13 +373,14 @@ func (s *Store) Revert(ctx context.Context, lang, key string, historyID, userID 
 	} else if err != nil {
 		return err
 	}
-	_, err = s.Save(ctx, lang, key, text, userID, -1)
+	_, err = s.Save(ctx, lang, key, text, userID, -1, KeepApproval)
 	return err
 }
 
 type LangStats struct {
 	Lang                                  string
 	Total, Done, Outdated, Missing, Human int
+	Approved                              int // up to date and approved; part of Done
 }
 
 func (l LangStats) Percent() int {
@@ -371,7 +411,8 @@ func (s *Store) Stats(ctx context.Context) ([]LangStats, error) {
 		SELECT t.lang,
 			coalesce(sum(t.source_hash = s.hash), 0),
 			coalesce(sum(t.source_hash != s.hash), 0),
-			coalesce(sum(t.source_hash = s.hash AND t.origin != 'machine'), 0)
+			coalesce(sum(t.source_hash = s.hash AND t.origin != 'machine'), 0),
+			coalesce(sum(t.source_hash = s.hash AND t.approved_by IS NOT NULL), 0)
 		FROM translations t JOIN source_strings s ON s.key = t.key AND s.removed = 0 AND s.draft = 0
 		GROUP BY t.lang`)
 	if err != nil {
@@ -380,12 +421,12 @@ func (s *Store) Stats(ctx context.Context) ([]LangStats, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var l string
-		var done, outdated, human int
-		if err := rows.Scan(&l, &done, &outdated, &human); err != nil {
+		var done, outdated, human, approved int
+		if err := rows.Scan(&l, &done, &outdated, &human, &approved); err != nil {
 			return nil, err
 		}
 		if st := byLang[l]; st != nil {
-			st.Done, st.Outdated, st.Human = done, outdated, human
+			st.Done, st.Outdated, st.Human, st.Approved = done, outdated, human, approved
 		}
 	}
 	for _, l := range langs {
@@ -398,14 +439,15 @@ func (s *Store) Stats(ctx context.Context) ([]LangStats, error) {
 
 // Filters for the string list.
 const (
-	FilterTodo     = "todo" // missing or outdated
-	FilterMissing  = "missing"
-	FilterOutdated = "outdated"
-	FilterDone     = "done"
-	FilterAll      = "all"
+	FilterTodo       = "todo" // missing or outdated
+	FilterMissing    = "missing"
+	FilterOutdated   = "outdated"
+	FilterDone       = "done"
+	FilterUnapproved = "unapproved" // done, waiting for a proofreader
+	FilterAll        = "all"
 )
 
-var Filters = []string{FilterTodo, FilterMissing, FilterOutdated, FilterDone, FilterAll}
+var Filters = []string{FilterTodo, FilterMissing, FilterOutdated, FilterDone, FilterUnapproved, FilterAll}
 
 func filterSQL(filter string) string {
 	switch filter {
@@ -417,6 +459,8 @@ func filterSQL(filter string) string {
 		return "t.source_hash != s.hash"
 	case FilterDone:
 		return "t.source_hash = s.hash"
+	case FilterUnapproved:
+		return "t.source_hash = s.hash AND t.approved_by IS NULL"
 	}
 	return "1"
 }
@@ -431,6 +475,9 @@ type Row struct {
 	UpdatedAt   string
 	Has         bool
 	Outdated    bool
+	Approved    bool
+	ApprovedBy  string // name
+	ApprovedAt  string
 }
 
 func (r Row) State() string {
@@ -445,14 +492,17 @@ func (r Row) State() string {
 
 const rowSelect = `
 	SELECT s.key, s.text, s.position, coalesce(t.text, ''), coalesce(t.origin, ''), coalesce(t.history_id, 0),
-		coalesce(u.name, ''), coalesce(t.updated_at, ''), t.key IS NOT NULL, coalesce(t.source_hash != s.hash, 0)
+		coalesce(u.name, ''), coalesce(t.updated_at, ''), t.key IS NOT NULL, coalesce(t.source_hash != s.hash, 0),
+		t.approved_by IS NOT NULL, coalesce(a.name, ''), coalesce(t.approved_at, '')
 	FROM source_strings s
 	LEFT JOIN translations t ON t.key = s.key AND t.lang = ?
-	LEFT JOIN users u ON u.id = t.user_id`
+	LEFT JOIN users u ON u.id = t.user_id
+	LEFT JOIN users a ON a.id = t.approved_by`
 
 func scanRow(row interface{ Scan(...any) error }) (Row, error) {
 	var r Row
-	err := row.Scan(&r.Key, &r.Source, &r.Position, &r.Text, &r.Origin, &r.HistoryID, &r.UserName, &r.UpdatedAt, &r.Has, &r.Outdated)
+	err := row.Scan(&r.Key, &r.Source, &r.Position, &r.Text, &r.Origin, &r.HistoryID, &r.UserName, &r.UpdatedAt, &r.Has, &r.Outdated,
+		&r.Approved, &r.ApprovedBy, &r.ApprovedAt)
 	return r, err
 }
 
