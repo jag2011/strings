@@ -23,13 +23,15 @@ import (
 const usage = `stringsd: the strings server, minimalistic string management
 
 Usage:
-  stringsd serve  [-db strings.db] [-addr :8080]
+  stringsd serve  [-db strings.db] [-addr :8080] [-trust-proxy]
   stringsd user   [-db strings.db] [-admin | -proofreader] [-url http://localhost:8080] <email> <name>
   stringsd import [-db strings.db] <file.arb>...
   stringsd export [-db strings.db] [-out .]
   stringsd token  [-db strings.db] <name>
 
-The database path can also be set with STRINGS_DB.
+The database path can also be set with STRINGS_DB, the listen address with
+STRINGS_ADDR. Behind a load balancer that appends X-Forwarded-For, set
+-trust-proxy (or STRINGS_TRUST_PROXY=1) so login limits apply per client.
 
 Sign-in links from an external account server (see README) are enabled with
 STRINGS_AUTH_URL (the code exchange endpoint), STRINGS_AUTH_SECRET and
@@ -51,11 +53,12 @@ func main() {
 	switch cmd {
 	case "serve":
 		addr := fs.String("addr", envOr("STRINGS_ADDR", ":8080"), "listen address")
+		trustProxy := fs.Bool("trust-proxy", os.Getenv("STRINGS_TRUST_PROXY") == "1", "take the client IP from X-Forwarded-For")
 		fs.Parse(args)
 		var ext *web.External
 		ext, err = externalFromEnv()
 		if err == nil {
-			err = serve(*dbPath, *addr, ext)
+			err = serve(*dbPath, *addr, ext, *trustProxy)
 		}
 	case "user":
 		admin := fs.Bool("admin", false, "make the user an admin")
@@ -131,18 +134,22 @@ func externalFromEnv() (*web.External, error) {
 	return x, nil
 }
 
-func serve(dbPath, addr string, ext *web.External) error {
+func serve(dbPath, addr string, ext *web.External, trustProxy bool) error {
 	return withStore(dbPath, func(s *store.Store) error {
 		srv, err := web.New(s, ext)
 		if err != nil {
 			return err
 		}
+		srv.TrustProxy = trustProxy
 		hs := &http.Server{
 			Addr:              addr,
 			Handler:           srv.Handler(),
 			ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout:       60 * time.Second,
 			WriteTimeout:      60 * time.Second,
+			// Longer than the load balancer's 60s idle timeout, so the
+			// server never closes a connection the balancer is about to reuse.
+			IdleTimeout: 2 * time.Minute,
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()

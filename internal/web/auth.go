@@ -68,7 +68,16 @@ func (srv *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 	srv.renderPublic(w, r, http.StatusOK, "login", "Log in", srv.newLoginData("", r.URL.Query().Get("next")))
 }
 
-func clientIP(r *http.Request) string {
+// clientIP keys the login rate limit. Behind a proxy, earlier
+// X-Forwarded-For entries come from the client and can be forged; only the
+// last one, appended by the proxy, is trusted.
+func (srv *Server) clientIP(r *http.Request) string {
+	if xff := r.Header.Values("X-Forwarded-For"); srv.TrustProxy && len(xff) > 0 {
+		last := xff[len(xff)-1]
+		if ip := strings.TrimSpace(last[strings.LastIndex(last, ",")+1:]); ip != "" {
+			return ip
+		}
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -79,7 +88,7 @@ func clientIP(r *http.Request) string {
 func (srv *Server) login(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(strings.TrimSpace(r.PostFormValue("email")))
 	data := srv.newLoginData(email, r.PostFormValue("next"))
-	key := clientIP(r) + "|" + email
+	key := srv.clientIP(r) + "|" + email
 	if srv.limiter.blocked(key) {
 		data.Error = "Too many attempts. Try again in 15 minutes."
 		srv.renderPublic(w, r, http.StatusTooManyRequests, "login", "Log in", data)

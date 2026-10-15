@@ -158,6 +158,14 @@ STRINGS_AUTH_NAME="My App"     # shown on the login page
 
 - Put it behind a reverse proxy that terminates TLS and sets
   `X-Forwarded-Proto: https`, so session cookies are marked `Secure`.
+- If the proxy appends the client IP to `X-Forwarded-For` (AWS load balancers
+  do), set `STRINGS_TRUST_PROXY=1` so login limits apply per client rather than
+  per proxy.
+- `GET /health` returns 200 while the database answers, for load balancer
+  health checks.
+- [`deploy/strings.service`](deploy/strings.service) is a systemd unit that
+  keeps the database in `/var/lib/strings` and reads secrets from
+  `/etc/strings/strings.env`.
 - All data is in the SQLite file plus its `-wal` file. Back up with
   `sqlite3 strings.db ".backup backup.db"`, or stream it with
   [Litestream](https://litestream.io).

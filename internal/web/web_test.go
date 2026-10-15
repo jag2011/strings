@@ -571,3 +571,42 @@ func TestMergeUser(t *testing.T) {
 		t.Errorf("merged user's page: %d", res.StatusCode)
 	}
 }
+
+func TestHealth(t *testing.T) {
+	e := setup(t)
+	res, body := e.get(http.DefaultClient, "/health")
+	if res.StatusCode != http.StatusOK || body != "ok\n" {
+		t.Fatalf("health: %d %q", res.StatusCode, body)
+	}
+	e.store.Close()
+	if res, _ := e.get(http.DefaultClient, "/health"); res.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("health with closed db: %d", res.StatusCode)
+	}
+}
+
+func TestClientIP(t *testing.T) {
+	for _, tc := range []struct {
+		trust bool
+		xff   []string
+		want  string
+	}{
+		{false, nil, "10.0.0.1"},
+		{false, []string{"203.0.113.9"}, "10.0.0.1"},
+		{true, nil, "10.0.0.1"},
+		{true, []string{"203.0.113.9"}, "203.0.113.9"},
+		// The client sent a forged entry; the proxy appended the real one.
+		{true, []string{"1.2.3.4, 203.0.113.9"}, "203.0.113.9"},
+		{true, []string{"1.2.3.4", "203.0.113.9"}, "203.0.113.9"},
+		{true, []string{" "}, "10.0.0.1"},
+	} {
+		srv := &Server{TrustProxy: tc.trust}
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = "10.0.0.1:5000"
+		for _, v := range tc.xff {
+			r.Header.Add("X-Forwarded-For", v)
+		}
+		if got := srv.clientIP(r); got != tc.want {
+			t.Errorf("trust=%v xff=%q: got %s, want %s", tc.trust, tc.xff, got, tc.want)
+		}
+	}
+}

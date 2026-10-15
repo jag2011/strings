@@ -27,6 +27,10 @@ var templateFS embed.FS
 var staticFS embed.FS
 
 type Server struct {
+	// TrustProxy takes the client IP from the last X-Forwarded-For entry,
+	// which the load balancer appends. Only set it behind a proxy that does.
+	TrustProxy bool
+
 	store    *store.Store
 	external *External // nil: no sign-in through an account server
 	pages    map[string]*template.Template
@@ -99,6 +103,7 @@ func (srv *Server) Handler() http.Handler {
 
 	static, _ := fs.Sub(staticFS, "static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", cacheForever(http.FileServerFS(static))))
+	mux.HandleFunc("GET /health", srv.health)
 	mux.HandleFunc("GET /login", srv.loginPage)
 	mux.HandleFunc("POST /login", srv.login)
 	mux.HandleFunc("POST /logout", srv.logout)
@@ -146,6 +151,19 @@ func (srv *Server) Handler() http.Handler {
 	// Rejects cross-site form posts (Sec-Fetch-Site / Origin), so forms need
 	// no CSRF tokens. Requests without those headers, like curl, pass.
 	return securityHeaders(http.NewCrossOriginProtection().Handler(mux))
+}
+
+// health is the load balancer's health check: 200 while the database answers.
+func (srv *Server) health(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := srv.store.Ping(ctx); err != nil {
+		log.Printf("health: %v", err)
+		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	fmt.Fprintln(w, "ok")
 }
 
 // pageCtx is passed to every template.

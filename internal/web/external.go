@@ -88,7 +88,7 @@ func (srv *Server) externalSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := externalData{App: x.Name, Code: r.PostFormValue("code")}
-	key := "external|" + clientIP(r)
+	key := "external|" + srv.clientIP(r)
 	if srv.limiter.blocked(key) {
 		data.Error = "Too many attempts. Try again in 15 minutes."
 		srv.renderPublic(w, r, http.StatusTooManyRequests, "signin", "Sign in", data)

@@ -59,6 +59,12 @@ func (s *Store) Close() error {
 	return s.w.Close()
 }
 
+// Ping checks that the database can be read.
+func (s *Store) Ping(ctx context.Context) error {
+	var one int
+	return s.r.QueryRowContext(ctx, "SELECT 1").Scan(&one)
+}
+
 // migrate applies schema/NNN_*.sql files newer than PRAGMA user_version.
 // Foreign keys are off while migrating, so migrations can rebuild tables
 // (sqlite.org/lang_altertable.html); violations are checked before commit.
