@@ -110,9 +110,12 @@ func main() {
 			fs.Usage()
 			os.Exit(2)
 		}
-		err = withStore(*dbPath, func(s *store.Store) error {
-			return s.Backup(context.Background(), fs.Arg(0))
-		})
+		// Opening a missing database would create an empty one to back up.
+		if _, err = os.Stat(*dbPath); err == nil {
+			err = withStore(*dbPath, func(s *store.Store) error {
+				return s.Backup(context.Background(), fs.Arg(0))
+			})
+		}
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:
