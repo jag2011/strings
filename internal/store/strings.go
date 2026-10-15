@@ -493,6 +493,9 @@ func (l LangStats) Percent() int {
 	return l.Done * 100 / l.Total
 }
 
+// Unapproved counts up-to-date strings waiting for a proofreader.
+func (l LangStats) Unapproved() int { return l.Done - l.Approved }
+
 func (l LangStats) ApprovedPercent() int {
 	if l.Total == 0 {
 		return 100

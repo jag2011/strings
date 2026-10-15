@@ -1,0 +1,22 @@
+{{define "progress-bar"}}
+<span class="bar" title="{{.Approved}} approved, {{.Unapproved}} awaiting approval, {{.Outdated}} outdated, {{.Missing}} missing">
+  <span class="bar-approved" style="flex-grow: {{.Approved}}"></span>
+  <span class="bar-unapproved" style="flex-grow: {{.Unapproved}}"></span>
+  <span class="bar-outdated" style="flex-grow: {{.Outdated}}"></span>
+  <span style="flex-grow: {{.Missing}}"></span>
+</span>
+{{end}}
+
+{{define "progress-legend"}}
+<ul class="stats legend">
+  <li><span class="swatch bar-approved"></span><span>Approved</span> <strong>{{.Approved}}</strong></li>
+  <li><span class="swatch bar-unapproved"></span><span>Awaiting approval</span> <strong>{{.Unapproved}}</strong></li>
+  {{if .Outdated}}<li><span class="swatch bar-outdated"></span><span>Outdated</span> <strong>{{.Outdated}}</strong></li>{{end}}
+  {{if .Missing}}<li><span class="swatch"></span><span>Missing</span> <strong>{{.Missing}}</strong></li>{{end}}
+</ul>
+{{end}}
+
+{{define "progress-pct"}}
+<span class="pct" title="{{.Approved}} of {{.Total}} approved"><strong>{{.ApprovedPercent}}%</strong>
+  {{- if eq .ApprovedPercent 100}}{{template "icon" "check"}}{{end}}<span class="visually-hidden">approved</span></span>
+{{end}}

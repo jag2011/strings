@@ -1,5 +1,6 @@
 {{define "icon"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
 {{- if eq . "languages"}}<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>
+{{- else if eq . "check"}}<path d="M20 6 9 17l-5-5"/>
 {{- else if eq . "activity"}}<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
 {{- else if eq . "profile"}}<circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/>
 {{- else if eq . "settings"}}<path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/>

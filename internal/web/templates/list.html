@@ -53,12 +53,11 @@
   {{with $d.Stats}}
   <section class="side-card">
     <h2>Progress</h2>
-    <ul class="stats meters">
-      <li><span>Complete</span> <strong>{{.Percent}}%</strong>
-        <span class="bar" title="{{.Done}} of {{.Total}} up to date"><span class="bar-done" style="width: {{.Percent}}%"></span></span></li>
-      <li><span>Approved</span> <strong>{{.ApprovedPercent}}%</strong>
-        <span class="bar" title="{{.Approved}} of {{.Total}} approved"><span class="bar-done" style="width: {{.ApprovedPercent}}%"></span></span></li>
+    <ul class="stats">
+      <li>{{template "progress-pct" .}}</li>
     </ul>
+    {{template "progress-bar" .}}
+    {{template "progress-legend" .}}
   </section>
   {{end}}
   {{template "top-members" $d.Top}}

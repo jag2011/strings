@@ -13,12 +13,9 @@
   <li>
     <a href="{{base}}/t/{{.Lang}}">
       <span class="lang-name">{{with flag .Lang}}<img class="flag" src="{{static .}}" alt="" width="20" height="15">{{else}}<span class="flag"></span>{{end}}{{langName .Lang}} <code>{{.Lang}}</code></span>
-      <span class="bar" title="{{.Done}} done, {{.Outdated}} outdated, {{.Missing}} missing">
-        <span class="bar-done" style="width: {{.Percent}}%"></span>
-      </span>
+      {{template "progress-bar" .}}
       <span class="counts">
-        <strong>{{.Percent}}%</strong>
-        {{if .Approved}}<span class="tag approved">{{.Approved}} approved</span>{{end}}
+        {{template "progress-pct" .}}
         {{if .Outdated}}<span class="tag outdated">{{.Outdated}} outdated</span>{{end}}
         {{if .Missing}}<span class="tag missing">{{.Missing}} missing</span>{{end}}
       </span>
@@ -35,12 +32,10 @@
       <li><strong>{{.Total}}</strong> {{plural .Total "string" "strings"}} in {{langName .SourceLang}}</li>
       {{if .Stats}}
       <li><strong>{{len .Stats}}</strong> {{plural (len .Stats) "language" "languages"}}, {{.Complete}} complete</li>
-      <li><strong>{{.Percent}}%</strong> translated overall</li>
-      {{if .Approved}}<li><span class="tag approved">{{.Approved}} approved</span></li>{{end}}
-      {{if .Outdated}}<li><span class="tag outdated">{{.Outdated}} outdated</span></li>{{end}}
-      {{if .Missing}}<li><span class="tag missing">{{.Missing}} missing</span></li>{{end}}
+      <li><strong>{{.Sum.ApprovedPercent}}%</strong> approved</li>
       {{end}}
     </ul>
+    {{if .Stats}}{{template "progress-bar" .Sum}}{{end}}
     {{end}}
   </section>
   {{template "top-members" .Data.Top}}
