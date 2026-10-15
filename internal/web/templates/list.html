@@ -3,7 +3,7 @@
 <p class="crumbs"><a href="{{base}}/">Languages</a> /</p>
 <h1>{{langName $d.Lang}} <code>{{$d.Lang}}</code></h1>
 
-<div {{if $d.Top}}class="with-side side-after"{{end}}>
+<div class="with-side side-after">
 <div>
 <form class="toolbar" method="get" data-search>
   <nav class="tabs" aria-label="Filter">
@@ -50,6 +50,17 @@
 </div>
 </div>
 <aside class="side">
+  {{with $d.Stats}}
+  <section class="side-card">
+    <h2>Progress</h2>
+    <ul class="stats meters">
+      <li><span>Complete</span> <strong>{{.Percent}}%</strong>
+        <span class="bar" title="{{.Done}} of {{.Total}} up to date"><span class="bar-done" style="width: {{.Percent}}%"></span></span></li>
+      <li><span>Approved</span> <strong>{{.ApprovedPercent}}%</strong>
+        <span class="bar" title="{{.Approved}} of {{.Total}} approved"><span class="bar-done" style="width: {{.ApprovedPercent}}%"></span></span></li>
+    </ul>
+  </section>
+  {{end}}
   {{template "top-members" $d.Top}}
 </aside>
 </div>

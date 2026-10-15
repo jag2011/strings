@@ -65,6 +65,7 @@ type listData struct {
 	Rows            []store.Row
 	Count           int
 	Page, Pages     int
+	Stats           store.LangStats
 	Top             []store.Contributor
 }
 
@@ -89,6 +90,15 @@ func (srv *Server) list(w http.ResponseWriter, r *http.Request, u *store.User) e
 	}
 	if d.Top, err = srv.store.TopContributors(r.Context(), lang, 5); err != nil {
 		return err
+	}
+	stats, err := srv.store.Stats(r.Context())
+	if err != nil {
+		return err
+	}
+	for _, st := range stats {
+		if st.Lang == lang {
+			d.Stats = st
+		}
 	}
 	d.Rows, d.Count = rows, count
 	d.Pages = max((count+pageSize-1)/pageSize, 1)

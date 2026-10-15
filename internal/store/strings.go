@@ -493,6 +493,13 @@ func (l LangStats) Percent() int {
 	return l.Done * 100 / l.Total
 }
 
+func (l LangStats) ApprovedPercent() int {
+	if l.Total == 0 {
+		return 100
+	}
+	return l.Approved * 100 / l.Total
+}
+
 // Stats counts per language. Human = up-to-date strings written by people
 // (imported or edited here), as opposed to machine translations. Drafts are
 // not counted.
