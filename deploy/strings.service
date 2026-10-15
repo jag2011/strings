@@ -1,0 +1,41 @@
+[Unit]
+Description=strings translation server
+After=network.target
+
+[Service]
+# Reachable by the load balancer; the security group must only allow port
+# 8080 from the load balancer's security group.
+ExecStart=/usr/local/bin/stringsd serve
+Environment=STRINGS_ADDR=:8080
+Environment=STRINGS_DB=/var/lib/strings/strings.db
+# Served under a path, next to other apps on the same host.
+Environment=STRINGS_BASE=/strings
+# The load balancer appends the client IP to X-Forwarded-For.
+Environment=STRINGS_TRUST_PROXY=1
+# Optional: STRINGS_AUTH_URL, STRINGS_AUTH_SECRET, STRINGS_AUTH_NAME.
+EnvironmentFile=-/etc/strings/strings.env
+Restart=on-failure
+
+# A fixed user rather than DynamicUser, so admin commands can run as the same
+# user: sudo -u strings stringsd user -db /var/lib/strings/strings.db ...
+User=strings
+Group=strings
+# Creates /var/lib/strings, owned by strings; the only writable path.
+StateDirectory=strings
+StateDirectoryMode=0700
+UMask=0077
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

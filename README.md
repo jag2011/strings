@@ -171,7 +171,8 @@ STRINGS_AUTH_NAME="My App"     # shown on the login page
   database, also while the server runs.
 - [`deploy/strings.service`](deploy/strings.service) is a systemd unit that
   keeps the database in `/var/lib/strings` and reads secrets from
-  `/etc/strings/strings.env`.
+  `/etc/strings/strings.env`; see
+  [`deploy/strings.env.example`](deploy/strings.env.example).
 - All data is in the SQLite file plus its `-wal` file. Back up with
   `sqlite3 strings.db ".backup backup.db"`, or stream it with
   [Litestream](https://litestream.io).
