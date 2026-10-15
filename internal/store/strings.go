@@ -424,6 +424,62 @@ func (s *Store) Revert(ctx context.Context, lang, key string, historyID, userID 
 	return err
 }
 
+// ErrForbidden means the user may not do this.
+var ErrForbidden = errors.New("not allowed")
+
+// DeleteVersion removes a history entry. Users may delete their own entries,
+// proofreaders and admins anyone's. Deleting the current version makes the
+// newest remaining one current, without approval, or removes the translation
+// when none is left. Only proofreaders and admins can delete the current
+// version of an approved translation.
+func (s *Store) DeleteVersion(ctx context.Context, lang, key string, historyID int64, u *User) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		var author sql.NullInt64
+		err := tx.QueryRowContext(ctx, "SELECT user_id FROM history WHERE id = ? AND lang = ? AND key = ?",
+			historyID, lang, key).Scan(&author)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		} else if err != nil {
+			return err
+		}
+		if !u.CanApprove() && author.Int64 != u.ID {
+			return ErrForbidden
+		}
+		var curID int64
+		var approved bool
+		err = tx.QueryRowContext(ctx, "SELECT history_id, approved_by IS NOT NULL FROM translations WHERE lang = ? AND key = ?",
+			lang, key).Scan(&curID, &approved)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if curID == historyID {
+			if approved && !u.CanApprove() {
+				return ErrApproved
+			}
+			res, err := tx.ExecContext(ctx, `
+				UPDATE translations SET (text, source_hash, origin, user_id, history_id) = (
+					SELECT text, source_hash, origin, user_id, id FROM history
+					WHERE lang = ?1 AND key = ?2 AND id != ?3 ORDER BY id DESC LIMIT 1),
+					approved_by = NULL, approved_at = NULL, updated_at = datetime('now')
+				WHERE lang = ?1 AND key = ?2 AND EXISTS (SELECT 1 FROM history WHERE lang = ?1 AND key = ?2 AND id != ?3)`,
+				lang, key, historyID)
+			if err != nil {
+				return err
+			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				if _, err := tx.ExecContext(ctx, "DELETE FROM translations WHERE lang = ? AND key = ?", lang, key); err != nil {
+					return err
+				}
+			}
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM approval_log WHERE history_id = ?", historyID); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, "DELETE FROM history WHERE id = ?", historyID)
+		return err
+	})
+}
+
 type LangStats struct {
 	Lang                                  string
 	Total, Done, Outdated, Missing, Human int
@@ -622,6 +678,7 @@ type Version struct {
 	ID         int64
 	Text       string
 	Origin     string
+	UserID     int64 // 0 if unknown
 	UserName   string
 	CreatedAt  string
 	Current    bool
@@ -645,7 +702,7 @@ func (s *Store) Entry(ctx context.Context, lang, key string) (*Entry, error) {
 		e.Meta = json.RawMessage(meta.String)
 	}
 	rows, err := s.r.QueryContext(ctx, `
-		SELECT h.id, h.text, h.origin, coalesce(u.name, ''), h.created_at, h.source_hash != ?
+		SELECT h.id, h.text, h.origin, coalesce(h.user_id, 0), coalesce(u.name, ''), h.created_at, h.source_hash != ?
 		FROM history h LEFT JOIN users u ON u.id = h.user_id
 		WHERE h.lang = ? AND h.key = ? ORDER BY h.id DESC LIMIT 50`, hash, lang, key)
 	if err != nil {
@@ -654,7 +711,7 @@ func (s *Store) Entry(ctx context.Context, lang, key string) (*Entry, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var v Version
-		if err := rows.Scan(&v.ID, &v.Text, &v.Origin, &v.UserName, &v.CreatedAt, &v.ForOldText); err != nil {
+		if err := rows.Scan(&v.ID, &v.Text, &v.Origin, &v.UserID, &v.UserName, &v.CreatedAt, &v.ForOldText); err != nil {
 			return nil, err
 		}
 		v.Current = v.ID == r.HistoryID
@@ -731,16 +788,17 @@ func (s *Store) Contributors(ctx context.Context) (map[string][]Contributor, err
 	return out, rows.Err()
 }
 
-// TopContributors counts the current translations each listed user wrote
-// across all languages and returns the first limit users, most first.
-func (s *Store) TopContributors(ctx context.Context, limit int) ([]Contributor, error) {
+// TopContributors counts the current translations each listed user wrote in
+// one language, or (lang "") across all languages, and returns the first
+// limit users, most first.
+func (s *Store) TopContributors(ctx context.Context, lang string, limit int) ([]Contributor, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT u.name, count(*) FROM translations t
 		JOIN users u ON u.id = t.user_id
 		JOIN source_strings s ON s.key = t.key AND s.removed = 0
 		JOIN languages l ON l.code = t.lang
-		WHERE u.unlisted = 0
-		GROUP BY u.id ORDER BY count(*) DESC, u.name LIMIT ?`, limit)
+		WHERE u.unlisted = 0 AND (?1 = '' OR t.lang = ?1)
+		GROUP BY u.id ORDER BY count(*) DESC, u.name LIMIT ?2`, lang, limit)
 	if err != nil {
 		return nil, err
 	}

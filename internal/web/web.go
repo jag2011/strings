@@ -123,6 +123,7 @@ func (srv *Server) Handler() http.Handler {
 	page("GET /t/{lang}/{key}", srv.editor)
 	page("POST /t/{lang}/{key}", srv.save)
 	page("POST /t/{lang}/{key}/revert/{id}", srv.revert)
+	page("POST /t/{lang}/{key}/delete/{id}", srv.deleteVersion)
 
 	admin("GET /admin", srv.adminPage)
 	admin("POST /admin/settings", srv.adminSettings)
@@ -288,6 +289,8 @@ func (srv *Server) renderError(w http.ResponseWriter, r *http.Request, u *store.
 		he = httpError{http.StatusNotFound, "Not found."}
 	} else if errors.Is(err, store.ErrApproved) {
 		he = httpError{http.StatusConflict, "This translation is approved. Remove the approval first."}
+	} else if errors.Is(err, store.ErrForbidden) {
+		he = httpError{http.StatusForbidden, "You can't do this."}
 	} else if !errors.As(err, &he) {
 		log.Printf("%s %s: %v", r.Method, r.URL.Path, err)
 		he = httpError{http.StatusInternalServerError, "Something went wrong."}

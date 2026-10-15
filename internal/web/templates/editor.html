@@ -71,12 +71,25 @@
         {{if .ForOldText}}· for an older source text{{end}}
         {{if .Current}}· <strong>current</strong>{{end}}
       </p>
-      {{if not (or .Current $e.Approved)}}
-      <form method="post" action="{{base}}/t/{{$d.Lang}}/{{esc $e.Key}}/revert/{{.ID}}">
-        <input type="hidden" name="filter" value="{{$d.Filter}}">
-        <input type="hidden" name="q" value="{{$d.Q}}">
-        <button class="small">Restore</button>
-      </form>
+      {{$restore := not (or .Current $e.Approved)}}
+      {{$delete := and (or (eq .UserID $.User.ID) $.User.CanApprove) (or (not .Current) (not $e.Approved) $.User.CanApprove)}}
+      {{if or $restore $delete}}
+      <div class="actions">
+        {{if $restore}}
+        <form method="post" action="{{base}}/t/{{$d.Lang}}/{{esc $e.Key}}/revert/{{.ID}}" class="inline-form">
+          <input type="hidden" name="filter" value="{{$d.Filter}}">
+          <input type="hidden" name="q" value="{{$d.Q}}">
+          <button class="small">Restore</button>
+        </form>
+        {{end}}
+        {{if $delete}}
+        <form method="post" action="{{base}}/t/{{$d.Lang}}/{{esc $e.Key}}/delete/{{.ID}}" class="inline-form">
+          <input type="hidden" name="filter" value="{{$d.Filter}}">
+          <input type="hidden" name="q" value="{{$d.Q}}">
+          <button class="small" data-confirm="{{if not .Current}}Delete this version?{{else if eq (len $e.History) 1}}Delete this translation? The string will be missing again.{{else}}Delete the current version? The one before it becomes current{{if $e.Approved}} and the approval is removed{{end}}.{{end}}">Delete</button>
+        </form>
+        {{end}}
+      </div>
       {{end}}
     </li>
   {{end}}

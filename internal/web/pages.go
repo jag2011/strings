@@ -33,7 +33,7 @@ func (srv *Server) home(w http.ResponseWriter, r *http.Request, u *store.User) e
 	if err != nil {
 		return err
 	}
-	top, err := srv.store.TopContributors(r.Context(), 20)
+	top, err := srv.store.TopContributors(r.Context(), "", 20)
 	if err != nil {
 		return err
 	}
@@ -65,6 +65,7 @@ type listData struct {
 	Rows            []store.Row
 	Count           int
 	Page, Pages     int
+	Top             []store.Contributor
 }
 
 func (srv *Server) list(w http.ResponseWriter, r *http.Request, u *store.User) error {
@@ -84,6 +85,9 @@ func (srv *Server) list(w http.ResponseWriter, r *http.Request, u *store.User) e
 		return err
 	}
 	if d.Counts, err = srv.store.FilterCounts(r.Context(), lang, d.Q); err != nil {
+		return err
+	}
+	if d.Top, err = srv.store.TopContributors(r.Context(), lang, 5); err != nil {
 		return err
 	}
 	d.Rows, d.Count = rows, count
@@ -248,6 +252,18 @@ func (srv *Server) revert(w http.ResponseWriter, r *http.Request, u *store.User)
 		return err
 	}
 	return redirect(w, r, editorURL(lang, key, r.PostFormValue("filter"), r.PostFormValue("q")), "Restored an earlier version.")
+}
+
+func (srv *Server) deleteVersion(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	lang, key := r.PathValue("lang"), r.PathValue("key")
+	if err := srv.requireLang(r.Context(), lang); err != nil {
+		return err
+	}
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err := srv.store.DeleteVersion(r.Context(), lang, key, id, u); err != nil {
+		return err
+	}
+	return redirect(w, r, editorURL(lang, key, r.PostFormValue("filter"), r.PostFormValue("q")), "Deleted a version.")
 }
 
 type activityData struct {

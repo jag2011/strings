@@ -133,14 +133,17 @@ func TestSaveConflictAndRevert(t *testing.T) {
 	if len(c["de"]) != 1 || c["de"][0].Name != "Two" {
 		t.Fatalf("contributors: %+v", c)
 	}
-	if top, _ := s.TopContributors(ctx, 20); len(top) != 1 || top[0].Name != "Two" || top[0].Edits != 1 {
+	if top, _ := s.TopContributors(ctx, "", 20); len(top) != 1 || top[0].Name != "Two" || top[0].Edits != 1 {
 		t.Fatalf("top contributors: %+v", top)
+	}
+	if top, _ := s.TopContributors(ctx, "fr", 20); len(top) != 0 {
+		t.Fatalf("top contributors in fr: %+v", top)
 	}
 	s.CreateUser(ctx, "admin@example.com", "Admin", "admin") // UpdateUser needs an active admin
 	if err := s.UpdateUser(ctx, u2.ID, "Two", "translator", false, true); err != nil {
 		t.Fatal(err)
 	}
-	if top, _ := s.TopContributors(ctx, 20); len(top) != 0 {
+	if top, _ := s.TopContributors(ctx, "", 20); len(top) != 0 {
 		t.Fatalf("unlisted user in top contributors: %+v", top)
 	}
 }
@@ -531,5 +534,48 @@ func TestBackup(t *testing.T) {
 	defer b.Close()
 	if ok, err := b.HasLanguage(ctx, "de"); err != nil || !ok {
 		t.Fatalf("backup misses language: %v %v", ok, err)
+	}
+}
+
+func TestDeleteVersion(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	s.ImportSource(ctx, parse(t, `{"a": "Apple"}`), nil)
+	s.AddLanguage(ctx, "de")
+	one, _ := s.CreateUser(ctx, "one@example.com", "One", "translator")
+	two, _ := s.CreateUser(ctx, "two@example.com", "Two", "translator")
+	p, _ := s.CreateUser(ctx, "p@example.com", "Petra", "proofreader")
+
+	s.Save(ctx, "de", "a", "Apfel", one.ID, -1, KeepApproval)
+	first := entry(t, s, "de", "a").HistoryID
+	s.Save(ctx, "de", "a", "Äpfel", two.ID, -1, KeepApproval)
+	second := entry(t, s, "de", "a").HistoryID
+
+	// Only the author or a proofreader may delete.
+	if err := s.DeleteVersion(ctx, "de", "a", first, two); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("deleted someone else's version: %v", err)
+	}
+	if err := s.DeleteVersion(ctx, "de", "b", second, two); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("wrong key: %v", err)
+	}
+
+	// Approved: the current version is locked for translators.
+	s.Save(ctx, "de", "a", "Äpfel", p.ID, -1, Approve)
+	if err := s.DeleteVersion(ctx, "de", "a", second, two); !errors.Is(err, ErrApproved) {
+		t.Fatalf("deleted an approved version: %v", err)
+	}
+	// A proofreader can; the one before becomes current, without approval.
+	if err := s.DeleteVersion(ctx, "de", "a", second, p); err != nil {
+		t.Fatal(err)
+	}
+	e := entry(t, s, "de", "a")
+	if e.Text != "Apfel" || e.HistoryID != first || e.Approved || e.UserName != "One" || len(e.History) != 1 {
+		t.Fatalf("after deleting the current version: %+v", e)
+	}
+	// The last version: the string is missing again.
+	if err := s.DeleteVersion(ctx, "de", "a", first, one); err != nil {
+		t.Fatal(err)
+	}
+	if e := entry(t, s, "de", "a"); e.Has || len(e.History) != 0 {
+		t.Fatalf("after deleting the last version: %+v", e)
 	}
 }

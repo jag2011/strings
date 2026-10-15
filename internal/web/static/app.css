@@ -179,6 +179,7 @@ form.grid .span { grid-column: 1 / -1; }
 @media (max-width: 860px) {
   .with-side { grid-template-columns: 1fr; }
   .side { order: -1; }
+  .side-after .side { order: 0; }
 }
 @media (max-width: 640px) {
   .langs a { grid-template-columns: 1fr auto; }
@@ -285,6 +286,7 @@ textarea[readonly] { color: var(--muted); }
 .history li.current::before { background: var(--accent); }
 .history .text { margin: 0; }
 .history .muted { margin: 2px 0 4px; }
+.history .actions { display: flex; gap: 8px; }
 
 /* Settings */
 

@@ -3,6 +3,8 @@
 <p class="crumbs"><a href="{{base}}/">Languages</a> /</p>
 <h1>{{langName $d.Lang}} <code>{{$d.Lang}}</code></h1>
 
+<div {{if $d.Top}}class="with-side side-after"{{end}}>
+<div>
 <form class="toolbar" method="get" data-search>
   <nav class="tabs" aria-label="Filter">
   {{range $d.Filters}}
@@ -45,5 +47,10 @@
   {{if lt $d.Page $d.Pages}}<a href="{{base}}/t/{{$d.Lang}}{{query "filter" $d.Filter "q" $d.Q "page" (print (add $d.Page 1))}}">Next →</a>{{end}}
 </nav>
 {{end}}
+</div>
+</div>
+<aside class="side">
+  {{template "top-members" $d.Top}}
+</aside>
 </div>
 {{end}}

@@ -43,15 +43,7 @@
     </ul>
     {{end}}
   </section>
-  {{with .Data.Top}}
-  <section class="side-card">
-    <h2>Top members</h2>
-    <p class="side-note"><em>by number of strings</em></p>
-    <ol class="top-members">
-      {{range .}}<li><span>{{.Name}}</span> <span class="muted">{{.Edits}}</span></li>{{end}}
-    </ol>
-  </section>
-  {{end}}
+  {{template "top-members" .Data.Top}}
 </aside>
 </div>
 {{end}}
