@@ -187,6 +187,9 @@ func importFiles(dbPath string, paths []string) error {
 			default:
 				t := r.Trans
 				fmt.Printf("%-20s %d added, %d updated, %d unchanged\n", r.File, t.Added, t.Updated, t.Unchanged)
+				if n := len(t.Untranslated); n > 0 {
+					fmt.Printf("%-20s   %d same as the source text, left missing\n", "", n)
+				}
 				for _, l := range []struct {
 					what string
 					keys []string

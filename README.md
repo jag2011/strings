@@ -112,7 +112,10 @@ The source file is never exported. It belongs to your repository.
   need a second click: unused placeholders, a different number of line
   breaks, text much longer than the source.
 - **Imports** never overwrite edits made in strings. Strings with errors are
-  skipped and reported, empty ones are treated as missing.
+  skipped and reported. Empty ones and copies of the source text (what many
+  tools put in for untranslated strings) are treated as missing. A copy that
+  is right, like "Tank" in German, is confirmed by saving it in strings once:
+  the export writes it, and later imports keep it.
 
 More in [docs/design.md](docs/design.md).
 

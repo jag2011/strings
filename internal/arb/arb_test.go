@@ -157,6 +157,25 @@ func TestICU(t *testing.T) {
 	}
 }
 
+func TestHasText(t *testing.T) {
+	for s, want := range map[string]bool{
+		"Tank":                             true,
+		"{count} Days":                     true,
+		"Ελληνικά":                         true,
+		"{count}":                          false,
+		"{n} %":                            false,
+		"{a} – {b}!":                       false,
+		"{n, number, ::percent}":           false,
+		"{count, plural, one{#} other{#}}": false,
+		"{count, plural, one{# day} other{# days}}": true,
+		"": false,
+	} {
+		if got := HasText(s); got != want {
+			t.Errorf("HasText(%q) = %v", s, got)
+		}
+	}
+}
+
 func TestCheck(t *testing.T) {
 	cases := []struct {
 		source, text string

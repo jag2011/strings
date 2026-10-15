@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -25,10 +26,19 @@ func ParseICU(s string) ([]Arg, error) {
 	return p.args, nil
 }
 
+// HasText reports whether a message has letters outside its placeholders,
+// i.e. something to translate. "{count}" and "{n} %" have none. Invalid
+// messages count as having text.
+func HasText(s string) bool {
+	p := &icuParser{s: s}
+	return p.message(0) != nil || p.letters
+}
+
 type icuParser struct {
-	s    string
-	i    int
-	args []Arg
+	s       string
+	i       int
+	args    []Arg
+	letters bool // literal text contains a letter
 }
 
 func (p *icuParser) message(depth int) error {
@@ -45,7 +55,9 @@ func (p *icuParser) message(depth int) error {
 			}
 			return nil
 		default:
-			p.i++
+			r, n := utf8.DecodeRuneInString(p.s[p.i:])
+			p.letters = p.letters || unicode.IsLetter(r)
+			p.i += n
 		}
 	}
 	if depth > 0 {

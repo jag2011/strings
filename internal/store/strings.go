@@ -213,6 +213,7 @@ type TranslationResult struct {
 	Unknown                   []string // keys not in the source
 	Invalid                   []string // keys failing validation, e.g. broken braces; not imported
 	Empty                     []string // empty translations of non-empty source text; left missing
+	Untranslated              []string // copies of the source text; left missing
 	Warned                    []string // imported, but with warnings like an unused placeholder
 }
 
@@ -241,6 +242,31 @@ func (s *Store) ImportTranslations(ctx context.Context, lang string, f *arb.File
 				res.Empty = append(res.Empty, m.Key)
 				continue
 			}
+			var curText, curOrigin string
+			var approved bool
+			err = tx.QueryRowContext(ctx, "SELECT text, origin, approved_by IS NOT NULL FROM translations WHERE lang = ? AND key = ?",
+				lang, m.Key).Scan(&curText, &curOrigin, &approved)
+			found := err == nil
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			// Tools fill untranslated strings with a copy of the source text, so
+			// a copy counts as missing. One that was edited or approved here is
+			// a confirmed translation (like "Tank" in German) and stays; one
+			// from an earlier import is removed, its history kept.
+			if m.Text == srcText && arb.HasText(srcText) {
+				switch {
+				case found && curText == m.Text && (curOrigin != "import" || approved):
+					res.Unchanged++
+					continue
+				case found && curText == m.Text:
+					if _, err := tx.ExecContext(ctx, "DELETE FROM translations WHERE lang = ? AND key = ?", lang, m.Key); err != nil {
+						return err
+					}
+				}
+				res.Untranslated = append(res.Untranslated, m.Key)
+				continue
+			}
 			errs, warns := arb.Check(srcText, m.Text)
 			if len(errs) > 0 {
 				res.Invalid = append(res.Invalid, m.Key)
@@ -249,15 +275,9 @@ func (s *Store) ImportTranslations(ctx context.Context, lang string, f *arb.File
 			if len(warns) > 0 {
 				res.Warned = append(res.Warned, m.Key)
 			}
-			var curText, curOrigin string
-			var approved bool
-			err = tx.QueryRowContext(ctx, "SELECT text, origin, approved_by IS NOT NULL FROM translations WHERE lang = ? AND key = ?",
-				lang, m.Key).Scan(&curText, &curOrigin, &approved)
 			switch {
-			case errors.Is(err, sql.ErrNoRows):
+			case !found:
 				res.Added++
-			case err != nil:
-				return err
 			case curText == m.Text:
 				res.Unchanged++
 				continue

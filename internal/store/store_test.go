@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -240,6 +241,38 @@ func TestSourceDecisions(t *testing.T) {
 	res, _ = s.ImportSource(ctx, parse(t, `{"a": "The cat", "@a": {"description": "Pet"}, "b": "Wolf", "c": "Eagle", "d": "Fish", "e": "New"}`), nil)
 	if res.Revision != 3 || res.Changed != 0 {
 		t.Errorf("metadata change: %+v", res)
+	}
+}
+
+func TestSourceCopies(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	s.ImportSource(ctx, parse(t, `{"tank": "Tank", "wolf": "Wolf", "ice": "Ice Vault", "n": "{count}", "hi": "Hello"}`), nil)
+	s.AddLanguage(ctx, "de")
+	u, _ := s.CreateUser(ctx, "t@example.com", "Tess", "translator")
+	if _, err := s.Save(ctx, "de", "tank", "Tank", u.ID, 0, KeepApproval); err != nil {
+		t.Fatal(err)
+	}
+	// A copy stored by an import from before copies counted as missing.
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		return write(ctx, tx, "de", "ice", "Ice Vault", sourceHash("Ice Vault"), "import", 0)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := s.ImportTranslations(ctx, "de", parse(t,
+		`{"tank": "Tank", "wolf": "Wolf", "ice": "Ice Vault", "n": "{count}", "hi": "Hallo"}`))
+	if err != nil || res.Added != 2 || res.Unchanged != 1 || len(res.Untranslated) != 2 {
+		t.Fatalf("import: %+v %v", res, err)
+	}
+	if e := entry(t, s, "de", "tank"); e.Text != "Tank" {
+		t.Errorf("confirmed copy removed: %+v", e)
+	}
+	if e := entry(t, s, "de", "ice"); e.Has || len(e.History) != 1 {
+		t.Errorf("imported copy should be missing, history kept: %+v", e)
+	}
+	if e := entry(t, s, "de", "n"); e.Text != "{count}" {
+		t.Errorf("placeholder-only copy is a translation: %+v", e)
 	}
 }
 
