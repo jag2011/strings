@@ -783,3 +783,56 @@ func entrySuggestion(t *testing.T, e *env, key string) int64 {
 	}
 	return en.Suggestions[0].ID
 }
+
+func TestAIPage(t *testing.T) {
+	e := setup(t)
+	admin := e.user("admin@example.com", "admin")
+	tr := e.user("tr@example.com", "translator")
+	ctx := context.Background()
+
+	if res, _ := e.get(tr, "/admin/ai"); res.StatusCode != http.StatusForbidden {
+		t.Errorf("translator: %d", res.StatusCode)
+	}
+	if _, body := e.get(admin, "/admin/ai"); !strings.Contains(body, "There are no AI users yet") {
+		t.Error("no hint without AI users")
+	}
+	ai, _ := e.store.CreateAIUser(ctx, "Claude Opus", "claude-opus-5-5")
+	e.store.Save(ctx, "de", "bye", "Tschüss", 2, -1, store.KeepApproval)
+	_, body := e.get(admin, "/admin/ai")
+	for _, want := range []string{"German (de) · 2 missing", "Claude Opus · claude-opus-5-5", `value="missing" checked`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("form misses %q", want)
+		}
+	}
+
+	post := func(v url.Values) (int, string) {
+		req, _ := http.NewRequest("POST", e.srv.URL+"/admin/ai", strings.NewReader(v.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		res, err := admin.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		return res.StatusCode, string(b)
+	}
+	id := fmt.Sprint(ai.ID)
+	for _, c := range []struct {
+		v    url.Values
+		want string
+	}{
+		{url.Values{"lang": {"de"}, "user": {id}, "input": {"missing"}}, "translate 2 strings into German, saved as translations."},
+		{url.Values{"lang": {"de"}, "user": {id}, "input": {"all"}}, "2 missing as translations, 1 already translated as suggestions."},
+		{url.Values{"lang": {"de"}, "user": {id}, "input": {"all"}, "suggest": {"1"}}, "translate 3 strings into German, all saved as suggestions."},
+	} {
+		if code, body := post(c.v); code != http.StatusOK || !strings.Contains(body, c.want) {
+			t.Errorf("%v: %d, misses %q", c.v, code, c.want)
+		}
+	}
+	if code, _ := post(url.Values{"lang": {"de"}, "user": {"2"}, "input": {"missing"}}); code != http.StatusUnprocessableEntity {
+		t.Errorf("a person as AI user: %d", code)
+	}
+	if code, _ := post(url.Values{"lang": {"xx"}, "user": {id}, "input": {"missing"}}); code != http.StatusUnprocessableEntity {
+		t.Errorf("unknown language: %d", code)
+	}
+}

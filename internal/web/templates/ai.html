@@ -1,0 +1,42 @@
+{{define "content"}}
+{{$d := .Data}}
+<h1>AI translation</h1>
+{{with $d.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
+{{with $d.Plan}}<p class="note" role="status">{{.}}</p>{{end}}
+
+<section class="card">
+  <h2>Translate</h2>
+  {{if not $d.Users}}
+  <p>There are no AI users yet. <a href="{{base}}/admin/users">Add one under Users</a>, then come back here.</p>
+  {{else}}
+  <form method="post" action="{{base}}/admin/ai" class="grid">
+    <label>Language
+      <select name="lang" required>
+        <option value="">Choose…</option>
+        {{range $d.Stats}}<option value="{{.Lang}}" {{if eq .Lang $d.Lang}}selected{{end}}>{{langName .Lang}} ({{.Lang}}) · {{.Missing}} missing</option>{{end}}
+      </select>
+    </label>
+    <label>AI user
+      <select name="user" required>
+        {{range $d.Users}}<option value="{{.ID}}" {{if eq .ID $d.UserID}}selected{{end}}>{{.Name}} · {{.AIModel}}</option>{{end}}
+      </select>
+    </label>
+    <fieldset>
+      <legend>Strings</legend>
+      <div class="choices">
+        <label class="check"><input type="radio" name="input" value="missing" {{if eq $d.Input "missing"}}checked{{end}}> Missing</label>
+        <label class="check"><input type="radio" name="input" value="all" {{if eq $d.Input "all"}}checked{{end}}> All</label>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>Output</legend>
+      <div class="choices">
+        <label class="check"><input type="checkbox" name="suggest" value="1" {{if $d.Suggest}}checked{{end}}> Save as suggestions</label>
+        <p class="hint muted small">Otherwise missing strings get the translation directly. Existing translations are never replaced; they get suggestions.</p>
+      </div>
+    </fieldset>
+    <div class="span"><button class="primary">Translate</button></div>
+  </form>
+  {{end}}
+</section>
+{{end}}

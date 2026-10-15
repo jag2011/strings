@@ -30,7 +30,7 @@
   <p class="muted small">AI users translate with a language model and can't sign in. Their translations are credited to them and wait for approval.</p>
   <form method="post" action="{{base}}/admin/users/ai" class="inline">
     <input name="name" placeholder="Name, e.g. Claude Opus" required aria-label="Name">
-    <input name="model" list="ai-models" value="{{index $d.Models 0}}" required aria-label="Model" class="mono">
+    <input name="model" list="ai-models" placeholder="Model, e.g. {{index $d.Models 0}}" required aria-label="Model">
     <button class="primary">Add AI user</button>
   </form>
 </section>

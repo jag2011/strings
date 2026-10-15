@@ -19,6 +19,7 @@
     <span class="admin" role="group" aria-label="Admin">
       <a href="{{base}}/admin" {{if eq $.Nav "admin"}}aria-current="page"{{end}}>{{template "icon" "settings"}}Settings</a>
       <a href="{{base}}/admin/users" {{if or (eq $.Nav "users") (eq $.Nav "merge")}}aria-current="page"{{end}}>{{template "icon" "users"}}Users</a>
+      <a href="{{base}}/admin/ai" {{if eq $.Nav "ai"}}aria-current="page"{{end}}>{{template "icon" "ai"}}AI</a>
     </span>
     {{end}}
   </nav>

@@ -42,16 +42,18 @@ type Server struct {
 }
 
 // New returns the server. external may be nil.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
 func New(s *store.Store, external *External) (*Server, error) {
 	srv := &Server{store: s, external: external, pages: map[string]*template.Template{}, limiter: newLimiter(10, 15*time.Minute),
 		static: fmt.Sprint(time.Now().Unix())}
 	funcs := template.FuncMap{
-		"plural": func(n int, one, many string) string {
-			if n == 1 {
-				return one
-			}
-			return many
-		},
+		"plural": plural,
 		"query": func(kv ...string) template.URL {
 			v := url.Values{}
 			for i := 0; i+1 < len(kv); i += 2 {
@@ -141,6 +143,8 @@ func (srv *Server) Handler() http.Handler {
 	admin("GET /admin/users", srv.adminUsers)
 	admin("POST /admin/users", srv.adminCreateUser)
 	admin("POST /admin/users/ai", srv.adminCreateAIUser)
+	admin("GET /admin/ai", srv.aiPage)
+	admin("POST /admin/ai", srv.aiTranslate)
 	admin("POST /admin/users/{id}", srv.adminUpdateUser)
 	admin("POST /admin/users/{id}/link", srv.adminUserLink)
 	admin("GET /admin/users/{id}/merge", srv.adminMergePage)
