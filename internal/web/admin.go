@@ -294,7 +294,8 @@ func (srv *Server) adminCreateUser(w http.ResponseWriter, r *http.Request, u *st
 
 func (srv *Server) adminUpdateUser(w http.ResponseWriter, r *http.Request, u *store.User) error {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	err := srv.store.UpdateUser(r.Context(), id, r.PostFormValue("name"), r.PostFormValue("role"), r.PostFormValue("disabled") == "1")
+	err := srv.store.UpdateUser(r.Context(), id, r.PostFormValue("name"), r.PostFormValue("role"),
+		r.PostFormValue("disabled") == "1", r.PostFormValue("unlisted") == "1")
 	if err != nil {
 		return srv.renderUsers(w, r, u, http.StatusUnprocessableEntity, usersData{Error: err.Error()})
 	}

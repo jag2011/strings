@@ -18,6 +18,10 @@ type homeData struct {
 	Stats      []store.LangStats
 	SourceLang string
 	Total      int
+
+	// Project totals for the side column, summed over all languages.
+	Complete, Percent, Approved, Outdated, Missing int
+	Top                                            []store.Contributor
 }
 
 func (srv *Server) home(w http.ResponseWriter, r *http.Request, u *store.User) error {
@@ -29,9 +33,27 @@ func (srv *Server) home(w http.ResponseWriter, r *http.Request, u *store.User) e
 	if err != nil {
 		return err
 	}
-	d := homeData{Stats: stats, SourceLang: set["source_lang"]}
+	top, err := srv.store.TopContributors(r.Context(), 20)
+	if err != nil {
+		return err
+	}
+	d := homeData{Stats: stats, SourceLang: set["source_lang"], Top: top}
 	if len(stats) > 0 {
 		d.Total = stats[0].Total
+	}
+	var done, all int
+	for _, s := range stats {
+		if s.Done == s.Total {
+			d.Complete++
+		}
+		done += s.Done
+		all += s.Total
+		d.Approved += s.Approved
+		d.Outdated += s.Outdated
+		d.Missing += s.Missing
+	}
+	if all > 0 {
+		d.Percent = done * 100 / all
 	}
 	return srv.render(w, r, http.StatusOK, "home", u, "", d)
 }

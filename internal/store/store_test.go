@@ -133,6 +133,16 @@ func TestSaveConflictAndRevert(t *testing.T) {
 	if len(c["de"]) != 1 || c["de"][0].Name != "Two" {
 		t.Fatalf("contributors: %+v", c)
 	}
+	if top, _ := s.TopContributors(ctx, 20); len(top) != 1 || top[0].Name != "Two" || top[0].Edits != 1 {
+		t.Fatalf("top contributors: %+v", top)
+	}
+	s.CreateUser(ctx, "admin@example.com", "Admin", "admin") // UpdateUser needs an active admin
+	if err := s.UpdateUser(ctx, u2.ID, "Two", "translator", false, true); err != nil {
+		t.Fatal(err)
+	}
+	if top, _ := s.TopContributors(ctx, 20); len(top) != 0 {
+		t.Fatalf("unlisted user in top contributors: %+v", top)
+	}
 }
 
 func TestListAndNext(t *testing.T) {
@@ -377,12 +387,12 @@ func TestUsersAndTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The last admin can't be disabled or demoted.
-	if err := s.UpdateUser(ctx, u.ID, "Admin", "translator", false); err == nil {
+	if err := s.UpdateUser(ctx, u.ID, "Admin", "translator", false, false); err == nil {
 		t.Error("demoted the last admin")
 	}
 	tr, _ := s.CreateUser(ctx, "t@example.com", "T", "translator")
 	ts, _ := s.CreateSession(ctx, tr.ID)
-	if err := s.UpdateUser(ctx, tr.ID, "T", "translator", true); err != nil {
+	if err := s.UpdateUser(ctx, tr.ID, "T", "translator", true, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.SessionUser(ctx, ts); !errors.Is(err, ErrNotFound) {

@@ -521,7 +521,7 @@ func TestExternalSignIn(t *testing.T) {
 	}
 
 	// Disabled users stay out.
-	e.store.UpdateUser(ctx, nick, "x", "translator", true)
+	e.store.UpdateUser(ctx, nick, "x", "translator", true, false)
 	f.add("c4", "hq-1", "new@example.com", "Nick2")
 	if _, res := e.signInWithCode("c4"); res.StatusCode != http.StatusForbidden {
 		t.Errorf("disabled: %d", res.StatusCode)

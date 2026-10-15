@@ -731,6 +731,31 @@ func (s *Store) Contributors(ctx context.Context) (map[string][]Contributor, err
 	return out, rows.Err()
 }
 
+// TopContributors counts the current translations each listed user wrote
+// across all languages and returns the first limit users, most first.
+func (s *Store) TopContributors(ctx context.Context, limit int) ([]Contributor, error) {
+	rows, err := s.r.QueryContext(ctx, `
+		SELECT u.name, count(*) FROM translations t
+		JOIN users u ON u.id = t.user_id
+		JOIN source_strings s ON s.key = t.key AND s.removed = 0
+		JOIN languages l ON l.code = t.lang
+		WHERE u.unlisted = 0
+		GROUP BY u.id ORDER BY count(*) DESC, u.name LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Contributor
+	for rows.Next() {
+		var c Contributor
+		if err := rows.Scan(&c.Name, &c.Edits); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // Activity is an edit or an approval change.
 type Activity struct {
 	Kind      string // "edit", "approved" or "unapproved"

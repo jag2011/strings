@@ -26,6 +26,7 @@ type User struct {
 	Name        string
 	Role        string
 	Disabled    bool
+	Unlisted    bool // left out of the top members on the home page
 	HasPassword bool
 	External    bool // signs in through the external account server
 	CreatedAt   string
@@ -40,11 +41,11 @@ func (u *User) IsAdmin() bool { return u != nil && u.Role == "admin" }
 // CanApprove says whether u may approve translations and remove approvals.
 func (u *User) CanApprove() bool { return u != nil && (u.Role == "admin" || u.Role == "proofreader") }
 
-const userCols = "id, email, name, role, disabled, password_hash IS NOT NULL, external_id IS NOT NULL, created_at"
+const userCols = "id, email, name, role, disabled, unlisted, password_hash IS NOT NULL, external_id IS NOT NULL, created_at"
 
 func scanUser(row interface{ Scan(...any) error }) (*User, error) {
 	u := &User{}
-	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.Disabled, &u.HasPassword, &u.External, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.Disabled, &u.Unlisted, &u.HasPassword, &u.External, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -93,7 +94,7 @@ func (s *Store) Users(ctx context.Context) ([]*User, error) {
 	return out, rows.Err()
 }
 
-func (s *Store) UpdateUser(ctx context.Context, id int64, name, role string, disabled bool) error {
+func (s *Store) UpdateUser(ctx context.Context, id int64, name, role string, disabled, unlisted bool) error {
 	if !slices.Contains(Roles, role) {
 		return fmt.Errorf("unknown role %q", role)
 	}
@@ -102,8 +103,8 @@ func (s *Store) UpdateUser(ctx context.Context, id int64, name, role string, dis
 	}
 	return s.tx(ctx, func(tx *sql.Tx) error {
 		// Names of external users follow their account.
-		if _, err := tx.ExecContext(ctx, "UPDATE users SET name = iif(external_id IS NULL, ?, name), role = ?, disabled = ? WHERE id = ?",
-			strings.TrimSpace(name), role, disabled, id); err != nil {
+		if _, err := tx.ExecContext(ctx, "UPDATE users SET name = iif(external_id IS NULL, ?, name), role = ?, disabled = ?, unlisted = ? WHERE id = ?",
+			strings.TrimSpace(name), role, disabled, unlisted, id); err != nil {
 			return err
 		}
 		var admins int

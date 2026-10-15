@@ -41,6 +41,7 @@
     </td>
     <td>
       <label class="check"><input form="u{{.ID}}" type="checkbox" name="disabled" value="1" {{if .Disabled}}checked{{end}}> disabled</label>
+      <label class="check" title="Leave out of Top members on the home page"><input form="u{{.ID}}" type="checkbox" name="unlisted" value="1" {{if .Unlisted}}checked{{end}}> unlisted</label>
       {{if .External}}<span class="tag">{{$d.App}}</span>{{else if not .HasPassword}}<span class="tag">invited</span>{{end}}
     </td>
     <td class="nowrap">

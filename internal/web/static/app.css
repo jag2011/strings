@@ -147,11 +147,11 @@ form.grid .span { grid-column: 1 / -1; }
 /* Language overview */
 
 .langs { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
-.langs a {
-  display: grid; grid-template-columns: minmax(140px, 220px) 1fr auto; gap: 16px; align-items: center;
+.langs a, .side-card {
   padding: 12px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
   color: var(--text);
 }
+.langs a { display: grid; grid-template-columns: minmax(140px, 220px) 1fr auto; gap: 16px; align-items: center; }
 .langs a:hover { border-color: var(--accent); text-decoration: none; }
 .lang-name code { color: var(--muted); }
 .flag {
@@ -162,6 +162,24 @@ form.grid .span { grid-column: 1 / -1; }
 .bar { height: 8px; border-radius: 4px; background: color-mix(in srgb, var(--missing) 25%, var(--line)); overflow: hidden; }
 .bar-done { display: block; height: 100%; background: var(--done); }
 .counts { display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+.with-side { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 24px; align-items: start; }
+.side-card h2 {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 8px;
+}
+.stats { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.stats strong { font-variant-numeric: tabular-nums; }
+.side { display: grid; gap: 16px; }
+.side-card h2:has(+ .side-note) { margin-bottom: 0; }
+.side-note { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
+.top-members { padding: 0; margin: 0; list-style: none; counter-reset: rank; display: grid; gap: 4px; }
+.top-members li { display: flex; gap: 8px; counter-increment: rank; }
+.top-members li::before { content: counter(rank); width: 18px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.top-members li span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.top-members .muted { font-variant-numeric: tabular-nums; }
+@media (max-width: 860px) {
+  .with-side { grid-template-columns: 1fr; }
+  .side { order: -1; }
+}
 @media (max-width: 640px) {
   .langs a { grid-template-columns: 1fr auto; }
   .langs .bar { grid-column: 1 / -1; grid-row: 2; }

@@ -3,7 +3,8 @@
   <p class="empty">No strings yet.
   {{if .User.IsAdmin}}<a href="{{base}}/admin#import">Import ARB files</a> to get started.{{else}}An admin needs to import them first.{{end}}</p>
 {{else}}
-<p class="muted">{{.Data.Total}} strings in {{langName .Data.SourceLang}}.</p>
+<div class="with-side">
+<div>
 {{if not .Data.Stats}}
   <p class="empty">No languages yet.{{if .User.IsAdmin}} <a href="{{base}}/admin#languages">Add one</a>.{{end}}</p>
 {{end}}
@@ -25,5 +26,33 @@
   </li>
 {{end}}
 </ul>
+</div>
+<aside class="side">
+  <section class="side-card">
+    <h2>Project</h2>
+    {{with .Data}}
+    <ul class="stats">
+      <li><strong>{{.Total}}</strong> {{plural .Total "string" "strings"}} in {{langName .SourceLang}}</li>
+      {{if .Stats}}
+      <li><strong>{{len .Stats}}</strong> {{plural (len .Stats) "language" "languages"}}, {{.Complete}} complete</li>
+      <li><strong>{{.Percent}}%</strong> translated overall</li>
+      {{if .Approved}}<li><span class="tag approved">{{.Approved}} approved</span></li>{{end}}
+      {{if .Outdated}}<li><span class="tag outdated">{{.Outdated}} outdated</span></li>{{end}}
+      {{if .Missing}}<li><span class="tag missing">{{.Missing}} missing</span></li>{{end}}
+      {{end}}
+    </ul>
+    {{end}}
+  </section>
+  {{with .Data.Top}}
+  <section class="side-card">
+    <h2>Top members</h2>
+    <p class="side-note"><em>by number of strings</em></p>
+    <ol class="top-members">
+      {{range .}}<li><span>{{.Name}}</span> <span class="muted">{{.Edits}}</span></li>{{end}}
+    </ol>
+  </section>
+  {{end}}
+</aside>
+</div>
 {{end}}
 {{end}}
