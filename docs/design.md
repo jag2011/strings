@@ -136,7 +136,13 @@ Schema: [`internal/store/schema/001_init.sql`](../internal/store/schema/001_init
 - **Edit conflicts:** the editor form carries the history id it showed. If
   someone saved in between, both texts are shown instead of silently
   overwriting.
-- **Origins:** `import`, `user`, and `machine` (reserved for machine translation).
+- **Origins:** `import`, `user`, and `machine` (written by an AI user).
+- **Suggestions** are alternative translations, one per user and string, e.g.
+  from several AI users. They are shown in the editor while they were made for
+  the current source text and differ from the current translation. *Use*
+  makes one current, credited to whoever suggested it; proofreaders can also
+  *Use & approve* or *Dismiss*. The list tags strings that have suggestions
+  and aren't approved yet.
 
 ## Accounts
 
@@ -158,6 +164,9 @@ Schema: [`internal/store/schema/001_init.sql`](../internal/store/schema/001_init
   sign-in, so admins can't rename external users. Unknown codes count
   towards a limit of 10 per IP in 15 minutes.
 - API tokens (`st_…`) are stored as SHA-256 and give full API access.
+- **AI users** (`users.ai_model`) translate with a language model. They can't
+  sign in (no password, placeholder email), are unlisted, and are added under
+  *Users*.
 
 ## Roadmap
 

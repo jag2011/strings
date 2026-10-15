@@ -273,6 +273,51 @@ func (srv *Server) deleteVersion(w http.ResponseWriter, r *http.Request, u *stor
 	return redirect(w, r, editorURL(lang, key, r.PostFormValue("filter"), r.PostFormValue("q")), "Deleted a version.")
 }
 
+func (srv *Server) useSuggestion(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	lang, key := r.PathValue("lang"), r.PathValue("key")
+	d, err := srv.editorState(r, lang, key)
+	if err != nil {
+		return err
+	}
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	i := slices.IndexFunc(d.Entry.Suggestions, func(g store.Suggestion) bool { return g.ID == id })
+	if i < 0 {
+		return notFound()
+	}
+	text := d.Entry.Suggestions[i].Text
+	back := editorURL(lang, key, d.Filter, d.Q)
+	if errs, _ := arb.Check(d.Entry.Source, text); len(errs) > 0 {
+		return redirect(w, r, back, "This suggestion can't be used: "+errs[0])
+	}
+	approve := r.PostFormValue("approve") == "1"
+	base, _ := strconv.ParseInt(r.PostFormValue("base"), 10, 64)
+	err = srv.store.UseSuggestion(r.Context(), lang, key, id, u, base, approve)
+	switch {
+	case errors.Is(err, store.ErrConflict):
+		return redirect(w, r, back, "Someone saved this string in the meantime. Check the current text before using a suggestion.")
+	case errors.Is(err, store.ErrApproved):
+		return redirect(w, r, back, "This translation is approved. Only proofreaders and admins can replace it.")
+	case err != nil:
+		return err
+	}
+	if approve {
+		return redirect(w, r, back, "Used and approved the suggestion.")
+	}
+	return redirect(w, r, back, "Used the suggestion.")
+}
+
+func (srv *Server) dismissSuggestion(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	lang, key := r.PathValue("lang"), r.PathValue("key")
+	if err := srv.requireLang(r.Context(), lang); err != nil {
+		return err
+	}
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err := srv.store.DismissSuggestion(r.Context(), lang, key, id, u); err != nil {
+		return err
+	}
+	return redirect(w, r, editorURL(lang, key, r.PostFormValue("filter"), r.PostFormValue("q")), "Dismissed a suggestion.")
+}
+
 type activityData struct {
 	Path  string // the page, for the pager
 	Lang  string // empty for all languages

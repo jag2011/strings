@@ -250,11 +250,12 @@ func (srv *Server) adminDeleteToken(w http.ResponseWriter, r *http.Request, u *s
 }
 
 type usersData struct {
-	Users []*store.User
-	Link  string // invite or reset link to pass on
-	For   *store.User
-	Error string
-	App   string // name of the external account server
+	Users  []*store.User
+	Link   string // invite or reset link to pass on
+	For    *store.User
+	Error  string
+	App    string // name of the external account server
+	Models []string
 }
 
 func (srv *Server) renderUsers(w http.ResponseWriter, r *http.Request, u *store.User, status int, d usersData) error {
@@ -265,6 +266,7 @@ func (srv *Server) renderUsers(w http.ResponseWriter, r *http.Request, u *store.
 	if srv.external != nil {
 		d.App = srv.external.Name
 	}
+	d.Models = AIModels
 	return srv.render(w, r, status, "users", u, "Users", d)
 }
 
@@ -292,10 +294,31 @@ func (srv *Server) adminCreateUser(w http.ResponseWriter, r *http.Request, u *st
 	return srv.renderUsers(w, r, u, http.StatusOK, usersData{Link: srv.baseURL(r) + "/invite/" + token, For: nu})
 }
 
+// AIModels are offered when adding an AI user; any other model id works too.
+var AIModels = []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"}
+
+func (srv *Server) adminCreateAIUser(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	if _, err := srv.store.CreateAIUser(r.Context(), r.PostFormValue("name"), r.PostFormValue("model")); err != nil {
+		return srv.renderUsers(w, r, u, http.StatusUnprocessableEntity, usersData{Error: err.Error()})
+	}
+	return redirect(w, r, "/admin/users", "AI user added.")
+}
+
 func (srv *Server) adminUpdateUser(w http.ResponseWriter, r *http.Request, u *store.User) error {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	err := srv.store.UpdateUser(r.Context(), id, r.PostFormValue("name"), r.PostFormValue("role"),
-		r.PostFormValue("disabled") == "1", r.PostFormValue("unlisted") == "1")
+	target, err := srv.store.User(r.Context(), id)
+	if err != nil {
+		return err
+	}
+	role := r.PostFormValue("role")
+	if target.IsAI() {
+		role = "translator"
+		err = srv.store.SetAIModel(r.Context(), id, r.PostFormValue("ai_model"))
+	}
+	if err == nil {
+		err = srv.store.UpdateUser(r.Context(), id, r.PostFormValue("name"), role,
+			r.PostFormValue("disabled") == "1", r.PostFormValue("unlisted") == "1")
+	}
 	if err != nil {
 		return srv.renderUsers(w, r, u, http.StatusUnprocessableEntity, usersData{Error: err.Error()})
 	}
@@ -307,6 +330,9 @@ func (srv *Server) adminUserLink(w http.ResponseWriter, r *http.Request, u *stor
 	target, err := srv.store.User(r.Context(), id)
 	if err != nil {
 		return err
+	}
+	if target.IsAI() {
+		return badRequest("AI users can't sign in.")
 	}
 	token, err := srv.store.CreateUserToken(r.Context(), id)
 	if err != nil {

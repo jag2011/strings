@@ -25,12 +25,27 @@
   </form>
 </section>
 
+<section class="card">
+  <h2>Add AI user</h2>
+  <p class="muted small">AI users translate with a language model and can't sign in. Their translations are credited to them and wait for approval.</p>
+  <form method="post" action="{{base}}/admin/users/ai" class="inline">
+    <input name="name" placeholder="Name, e.g. Claude Opus" required aria-label="Name">
+    <input name="model" list="ai-models" value="{{index $d.Models 0}}" required aria-label="Model" class="mono">
+    <button class="primary">Add AI user</button>
+  </form>
+</section>
+<datalist id="ai-models">{{range $d.Models}}<option value="{{.}}">{{end}}</datalist>
+
 <table class="users">
-  <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead>
+  <thead><tr><th>Name</th><th>Email or model</th><th>Role</th><th>Status</th><th></th></tr></thead>
   <tbody>
   {{range $d.Users}}
   <tr id="user-{{.ID}}" {{if .Disabled}}class="disabled"{{end}}>
     <td><input form="u{{.ID}}" name="name" value="{{.Name}}" required aria-label="Name" {{if .External}}readonly title="Follows their {{$d.App}} account"{{end}}></td>
+    {{if .IsAI}}
+    <td><input form="u{{.ID}}" name="ai_model" value="{{.AIModel}}" list="ai-models" required aria-label="Model" class="mono"></td>
+    <td><span class="tag">AI</span></td>
+    {{else}}
     <td>{{.Email}}</td>
     <td>
       <select form="u{{.ID}}" name="role" aria-label="Role">
@@ -39,14 +54,15 @@
         <option value="admin" {{if eq .Role "admin"}}selected{{end}}>Admin</option>
       </select>
     </td>
+    {{end}}
     <td>
       <label class="check"><input form="u{{.ID}}" type="checkbox" name="disabled" value="1" {{if .Disabled}}checked{{end}}> disabled</label>
       <label class="check" title="Leave out of Top members on the home page"><input form="u{{.ID}}" type="checkbox" name="unlisted" value="1" {{if .Unlisted}}checked{{end}}> unlisted</label>
-      {{if .External}}<span class="tag">{{$d.App}}</span>{{else if not .HasPassword}}<span class="tag">invited</span>{{end}}
+      {{if .External}}<span class="tag">{{$d.App}}</span>{{else if and (not .HasPassword) (not .IsAI)}}<span class="tag">invited</span>{{end}}
     </td>
     <td class="nowrap">
       <form id="u{{.ID}}" method="post" action="{{base}}/admin/users/{{.ID}}" class="inline-form"><button class="small">Save</button></form>
-      {{$link := or .HasPassword (not .External)}}{{$merge := ne .ID $.User.ID}}
+      {{$link := and (not .IsAI) (or .HasPassword (not .External))}}{{$merge := ne .ID $.User.ID}}
       <details class="menu">
         <summary class="button small" title="More actions" aria-label="More actions for {{.Name}}">⋮</summary>
         <div class="menu-items">

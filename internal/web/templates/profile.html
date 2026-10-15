@@ -2,10 +2,10 @@
 {{$d := .Data}}{{$p := $d.Profile}}
 <h1>{{$p.Name}}{{if $d.Own}} <span class="muted">· you</span>{{end}}</h1>
 <p class="muted small profile-meta">
-  <span class="tag">{{$p.Role}}</span>
+  {{if $p.IsAI}}<span class="tag">AI</span> <code>{{$p.AIModel}}</code>{{else}}<span class="tag">{{$p.Role}}</span>{{end}}
   {{if and $.User.IsAdmin $p.Disabled}}<span class="tag missing">disabled</span>{{end}}
   member since {{date $p.CreatedAt}}
-  {{if $d.ShowEmail}}· {{$p.Email}}{{end}}
+  {{if and $d.ShowEmail (not $p.IsAI)}}· {{$p.Email}}{{end}}
   {{if $.User.IsAdmin}}· <a href="{{base}}/admin/users#user-{{$p.ID}}">Manage</a>{{end}}
 </p>
 {{if $d.Own}}<p class="muted small">Your email is only shown to you and admins.</p>{{end}}

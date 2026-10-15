@@ -59,6 +59,34 @@
   <p class="muted small hint" hidden data-hint><kbd>Ctrl</kbd>+<kbd>Enter</kbd> saves and opens the next string.</p>
 </form>
 
+{{with $e.Suggestions}}
+<details class="suggestions" {{if not $e.Approved}}open{{end}}>
+  <summary><h2>Suggestions <span class="badge">{{len .}}</span></h2></summary>
+  <ul>
+  {{range .}}
+    <li>
+      <p class="text" lang="{{bcp47 $d.Lang}}" dir="{{dir $d.Lang}}">{{.Text}}</p>
+      <p class="muted small">
+        <a href="{{base}}/u/{{.UserID}}">{{.UserName}}</a>{{if .AIModel}} <span class="tag" title="{{.AIModel}}">AI</span>{{end}} · {{date .CreatedAt}}
+      </p>
+      {{if or $canApprove (not $e.Approved)}}
+      <form method="post" class="actions">
+        <input type="hidden" name="base" value="{{$e.HistoryID}}">
+        <input type="hidden" name="filter" value="{{$d.Filter}}">
+        <input type="hidden" name="q" value="{{$d.Q}}">
+        <button class="small" formaction="{{base}}/t/{{$d.Lang}}/{{esc $e.Key}}/suggestions/{{.ID}}/use">Use</button>
+        {{if $canApprove}}
+        <button class="small" formaction="{{base}}/t/{{$d.Lang}}/{{esc $e.Key}}/suggestions/{{.ID}}/use" name="approve" value="1">Use &amp; approve</button>
+        <button class="small" formaction="{{base}}/t/{{$d.Lang}}/{{esc $e.Key}}/suggestions/{{.ID}}/dismiss">Dismiss</button>
+        {{end}}
+      </form>
+      {{end}}
+    </li>
+  {{end}}
+  </ul>
+</details>
+{{end}}
+
 {{with $e.History}}
 <section class="history">
   <h2>History</h2>

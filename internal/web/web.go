@@ -125,6 +125,8 @@ func (srv *Server) Handler() http.Handler {
 	page("POST /t/{lang}/{key}", srv.save)
 	page("POST /t/{lang}/{key}/revert/{id}", srv.revert)
 	page("POST /t/{lang}/{key}/delete/{id}", srv.deleteVersion)
+	page("POST /t/{lang}/{key}/suggestions/{id}/use", srv.useSuggestion)
+	page("POST /t/{lang}/{key}/suggestions/{id}/dismiss", srv.dismissSuggestion)
 
 	admin("GET /admin", srv.adminPage)
 	admin("POST /admin/settings", srv.adminSettings)
@@ -138,6 +140,7 @@ func (srv *Server) Handler() http.Handler {
 	admin("POST /admin/tokens/{id}/delete", srv.adminDeleteToken)
 	admin("GET /admin/users", srv.adminUsers)
 	admin("POST /admin/users", srv.adminCreateUser)
+	admin("POST /admin/users/ai", srv.adminCreateAIUser)
 	admin("POST /admin/users/{id}", srv.adminUpdateUser)
 	admin("POST /admin/users/{id}/link", srv.adminUserLink)
 	admin("GET /admin/users/{id}/merge", srv.adminMergePage)

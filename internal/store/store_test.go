@@ -579,3 +579,94 @@ func TestDeleteVersion(t *testing.T) {
 		t.Fatalf("after deleting the last version: %+v", e)
 	}
 }
+
+func TestSuggestions(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana"}`), nil)
+	s.AddLanguage(ctx, "de")
+	opus, err := s.CreateAIUser(ctx, "Claude Opus", "claude-opus-5-5")
+	if err != nil || !opus.IsAI() || !opus.Unlisted {
+		t.Fatal(opus, err)
+	}
+	haiku, _ := s.CreateAIUser(ctx, "Claude Haiku", "claude-haiku-5-5")
+	tr, _ := s.CreateUser(ctx, "t@example.com", "Tom", "translator")
+	p, _ := s.CreateUser(ctx, "p@example.com", "Petra", "proofreader")
+
+	if err := s.Suggest(ctx, "de", "missing", "x", opus.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown key: %v", err)
+	}
+	s.Suggest(ctx, "de", "a", "Apfel?", opus.ID)
+	s.Suggest(ctx, "de", "a", "Apfel", opus.ID) // replaces the first
+	s.Suggest(ctx, "de", "a", "Der Apfel", haiku.ID)
+	e := entry(t, s, "de", "a")
+	if len(e.Suggestions) != 2 || e.Suggestions[0].Text != "Apfel" || e.Suggestions[0].AIModel != "claude-opus-5-5" {
+		t.Fatalf("suggestions: %+v", e.Suggestions)
+	}
+	if rows, _, _ := s.List(ctx, "de", FilterAll, "", 0, 10); rows[0].Suggestions != 2 || rows[1].Suggestions != 0 {
+		t.Errorf("counts: %+v", rows)
+	}
+
+	// Using one makes it current, credited to the AI user, and removes it.
+	if err := s.UseSuggestion(ctx, "de", "a", e.Suggestions[0].ID, tr, 0, true); !errors.Is(err, ErrForbidden) {
+		t.Errorf("translators can't approve: %v", err)
+	}
+	if err := s.UseSuggestion(ctx, "de", "a", e.Suggestions[0].ID, tr, 99, false); !errors.Is(err, ErrConflict) {
+		t.Errorf("stale base: %v", err)
+	}
+	if err := s.UseSuggestion(ctx, "de", "a", e.Suggestions[0].ID, tr, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	e = entry(t, s, "de", "a")
+	if e.Text != "Apfel" || e.Origin != "machine" || e.UserID != opus.ID || e.Approved || len(e.Suggestions) != 1 {
+		t.Fatalf("used: %+v", e)
+	}
+
+	// A suggestion equal to the current text is hidden.
+	s.Suggest(ctx, "de", "a", "Apfel", haiku.ID)
+	if e := entry(t, s, "de", "a"); len(e.Suggestions) != 0 {
+		t.Errorf("same as current: %+v", e.Suggestions)
+	}
+	s.Suggest(ctx, "de", "a", "Der Apfel", haiku.ID)
+
+	// Approved strings aren't counted in the list, and only proofreaders
+	// can replace them.
+	s.Save(ctx, "de", "a", "Apfel", p.ID, -1, Approve)
+	if rows, _, _ := s.List(ctx, "de", FilterAll, "", 0, 10); rows[0].Suggestions != 0 {
+		t.Errorf("approved count: %+v", rows[0])
+	}
+	id := entry(t, s, "de", "a").Suggestions[0].ID
+	if err := s.UseSuggestion(ctx, "de", "a", id, tr, -1, false); !errors.Is(err, ErrApproved) {
+		t.Errorf("translator over approved: %v", err)
+	}
+	if err := s.UseSuggestion(ctx, "de", "a", id, p, -1, true); err != nil {
+		t.Fatal(err)
+	}
+	if e := entry(t, s, "de", "a"); e.Text != "Der Apfel" || !e.Approved || e.ApprovedBy != "Petra" || e.UserID != haiku.ID {
+		t.Errorf("use and approve: %+v", e.Row)
+	}
+
+	// Dismissing, and hiding suggestions for an older source text.
+	s.Suggest(ctx, "de", "b", "Banane", opus.ID)
+	id = entry(t, s, "de", "b").Suggestions[0].ID
+	if err := s.DismissSuggestion(ctx, "de", "b", id, tr); !errors.Is(err, ErrForbidden) {
+		t.Errorf("translator dismiss: %v", err)
+	}
+	if err := s.DismissSuggestion(ctx, "de", "b", id, p); err != nil {
+		t.Fatal(err)
+	}
+	s.Suggest(ctx, "de", "b", "Banane", opus.ID)
+	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Bananas"}`), nil)
+	if e := entry(t, s, "de", "b"); len(e.Suggestions) != 0 {
+		t.Errorf("old source text: %+v", e.Suggestions)
+	}
+
+	// Merging moves suggestions.
+	s.CreateUser(ctx, "admin@example.com", "Ada", "admin")
+	s.Suggest(ctx, "de", "b", "Bananen", haiku.ID)
+	if err := s.MergeUser(ctx, haiku.ID, opus.ID); err != nil {
+		t.Fatal(err)
+	}
+	if e := entry(t, s, "de", "b"); len(e.Suggestions) != 1 || e.Suggestions[0].UserID != opus.ID {
+		t.Errorf("merged: %+v", e.Suggestions)
+	}
+}

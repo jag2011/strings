@@ -34,6 +34,7 @@
       {{- if .Has}}<span class="text">{{.Text}}</span>{{else}}<span class="tag missing">missing</span>{{end}}
       {{- if .Outdated}} <span class="tag outdated">outdated</span>{{end -}}
       {{- if .Approved}} <span class="approved" title="Approved by {{.ApprovedBy}}" role="img" aria-label="approved">✓</span>{{end -}}
+      {{- with .Suggestions}} <span class="tag suggested">{{.}} {{plural . "suggestion" "suggestions"}}</span>{{end -}}
     </td>
   </tr>
   {{end}}

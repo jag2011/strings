@@ -28,7 +28,8 @@ type User struct {
 	Disabled    bool
 	Unlisted    bool // left out of the top members on the home page
 	HasPassword bool
-	External    bool // signs in through the external account server
+	External    bool   // signs in through the external account server
+	AIModel     string // the language model of an AI user; empty for people
 	CreatedAt   string
 }
 
@@ -38,14 +39,20 @@ var Roles = []string{"translator", "proofreader", "admin"}
 
 func (u *User) IsAdmin() bool { return u != nil && u.Role == "admin" }
 
+// IsAI says whether u is an AI user, which translates through a language
+// model and can't sign in.
+func (u *User) IsAI() bool { return u != nil && u.AIModel != "" }
+
 // CanApprove says whether u may approve translations and remove approvals.
 func (u *User) CanApprove() bool { return u != nil && (u.Role == "admin" || u.Role == "proofreader") }
 
-const userCols = "id, email, name, role, disabled, unlisted, password_hash IS NOT NULL, external_id IS NOT NULL, created_at"
+const userCols = "id, email, name, role, disabled, unlisted, password_hash IS NOT NULL, external_id IS NOT NULL, ai_model, created_at"
 
 func scanUser(row interface{ Scan(...any) error }) (*User, error) {
 	u := &User{}
-	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.Disabled, &u.Unlisted, &u.HasPassword, &u.External, &u.CreatedAt)
+	var model sql.NullString
+	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.Disabled, &u.Unlisted, &u.HasPassword, &u.External, &model, &u.CreatedAt)
+	u.AIModel = model.String
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -71,6 +78,31 @@ func (s *Store) CreateUser(ctx context.Context, email, name, role string) (*User
 		return nil, fmt.Errorf("a user with this email already exists")
 	}
 	return u, err
+}
+
+// CreateAIUser adds an AI user. AI users are unlisted, since they would
+// otherwise top the members list.
+func (s *Store) CreateAIUser(ctx context.Context, name, model string) (*User, error) {
+	name, model = strings.TrimSpace(name), strings.TrimSpace(model)
+	if name == "" {
+		return nil, fmt.Errorf("a name is required")
+	}
+	if model == "" {
+		return nil, fmt.Errorf("a model is required")
+	}
+	token, _ := NewToken()
+	email := "ai-" + strings.ToLower(token[:12]) + "@strings.invalid"
+	return scanUser(s.w.QueryRowContext(ctx,
+		"INSERT INTO users (email, name, role, unlisted, ai_model) VALUES (?, ?, 'translator', 1, ?) RETURNING "+userCols, email, name, model))
+}
+
+// SetAIModel changes the model of an AI user.
+func (s *Store) SetAIModel(ctx context.Context, id int64, model string) error {
+	if model = strings.TrimSpace(model); model == "" {
+		return fmt.Errorf("a model is required")
+	}
+	_, err := s.w.ExecContext(ctx, "UPDATE users SET ai_model = ? WHERE id = ? AND ai_model IS NOT NULL", model, id)
+	return err
 }
 
 func (s *Store) User(ctx context.Context, id int64) (*User, error) {
@@ -154,6 +186,11 @@ func (s *Store) MergeUser(ctx context.Context, from, into int64) error {
 			"UPDATE translations SET user_id = ?1 WHERE user_id = ?2",
 			"UPDATE translations SET approved_by = ?1 WHERE approved_by = ?2",
 			"UPDATE approval_log SET user_id = ?1 WHERE user_id = ?2",
+			// Of two suggestions for the same string, the newer one stays.
+			`DELETE FROM suggestions WHERE user_id = ?1 AND EXISTS (SELECT 1 FROM suggestions f
+				WHERE f.user_id = ?2 AND f.lang = suggestions.lang AND f.key = suggestions.key AND f.created_at >= suggestions.created_at)`,
+			"UPDATE OR IGNORE suggestions SET user_id = ?1 WHERE user_id = ?2",
+			"DELETE FROM suggestions WHERE user_id = ?2",
 			"DELETE FROM users WHERE id = ?2",
 			"UPDATE users SET external_id = coalesce(external_id, ?3) WHERE id = ?1",
 		} {

@@ -357,7 +357,17 @@ const (
 // it up to date. Changing an approved translation without Unapprove returns
 // ErrApproved. saved reports whether the text or the approval changed.
 func (s *Store) Save(ctx context.Context, lang, key, text string, userID, base int64, approval Approval) (saved bool, err error) {
-	err = s.tx(ctx, func(tx *sql.Tx) error {
+	err = s.tx(ctx, func(tx *sql.Tx) (err error) {
+		saved, err = save(ctx, tx, lang, key, text, "user", userID, userID, base, approval)
+		return err
+	})
+	return saved, err
+}
+
+// save is Save for text written by author with the given origin. The
+// approval is changed by actor.
+func save(ctx context.Context, tx *sql.Tx, lang, key, text, origin string, author, actor, base int64, approval Approval) (saved bool, err error) {
+	err = func() error {
 		var hash string
 		err := tx.QueryRowContext(ctx, "SELECT hash FROM source_strings WHERE key = ? AND removed = 0 AND draft = 0", key).Scan(&hash)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -385,7 +395,7 @@ func (s *Store) Save(ctx context.Context, lang, key, text string, userID, base i
 		}
 		if approved && approval == Unapprove {
 			saved = true
-			if err := logApproval(ctx, tx, lang, key, false, userID); err != nil {
+			if err := logApproval(ctx, tx, lang, key, false, actor); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(ctx, "UPDATE translations SET approved_by = NULL, approved_at = NULL WHERE lang = ? AND key = ?", lang, key); err != nil {
@@ -394,20 +404,20 @@ func (s *Store) Save(ctx context.Context, lang, key, text string, userID, base i
 		}
 		if !unchanged {
 			saved = true
-			if err := write(ctx, tx, lang, key, text, hash, "user", userID); err != nil {
+			if err := write(ctx, tx, lang, key, text, hash, origin, author); err != nil {
 				return err
 			}
 		}
 		if approval == Approve && (!approved || !unchanged) {
 			saved = true
 			if _, err := tx.ExecContext(ctx, "UPDATE translations SET approved_by = ?, approved_at = datetime('now') WHERE lang = ? AND key = ?",
-				userID, lang, key); err != nil {
+				actor, lang, key); err != nil {
 				return err
 			}
-			return logApproval(ctx, tx, lang, key, true, userID)
+			return logApproval(ctx, tx, lang, key, true, actor)
 		}
 		return nil
-	})
+	}()
 	return saved, err
 }
 
@@ -597,6 +607,7 @@ type Row struct {
 	ApprovedBy   string // name
 	ApprovedByID int64
 	ApprovedAt   string
+	Suggestions  int // waiting to be picked; only counted by List, and not for approved strings
 }
 
 func (r Row) State() string {
@@ -658,7 +669,17 @@ func (s *Store) List(ctx context.Context, lang, filter, q string, offset, limit 
 		}
 		out = append(out, r)
 	}
-	return out, count, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	counts, err := s.suggestionCounts(ctx, lang)
+	if err != nil {
+		return nil, 0, err
+	}
+	for i := range out {
+		out[i].Suggestions = counts[out[i].Key]
+	}
+	return out, count, nil
 }
 
 // Next returns the key after position that matches filter and q, wrapping
@@ -683,6 +704,7 @@ type Entry struct {
 	Row
 	Meta        json.RawMessage
 	SourceSince string // when the source text last changed
+	Suggestions []Suggestion
 	History     []Version
 }
 
@@ -729,7 +751,11 @@ func (s *Store) Entry(ctx context.Context, lang, key string) (*Entry, error) {
 		v.Current = v.ID == r.HistoryID
 		e.History = append(e.History, v)
 	}
-	return e, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	e.Suggestions, err = suggestions(ctx, s.r, lang, key)
+	return e, err
 }
 
 // Export builds the ARB file for a language: keys in source order, missing

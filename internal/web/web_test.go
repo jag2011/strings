@@ -724,3 +724,62 @@ func TestBasePath(t *testing.T) {
 		t.Error("invite link misses the base path")
 	}
 }
+
+func TestSuggestionsFlow(t *testing.T) {
+	e := setup(t)
+	admin := e.user("admin@example.com", "admin")
+	tr := e.user("tr@example.com", "translator")
+	ctx := context.Background()
+
+	if res := e.post(admin, "/admin/users/ai", url.Values{"name": {"Claude Opus"}, "model": {"claude-opus-5-5"}}); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("add AI user: %d", res.StatusCode)
+	}
+	users, _ := e.store.Users(ctx)
+	var ai *store.User
+	for _, u := range users {
+		if u.IsAI() {
+			ai = u
+		}
+	}
+	if ai == nil || ai.AIModel != "claude-opus-5-5" {
+		t.Fatalf("AI user: %+v", ai)
+	}
+	if res := e.post(admin, fmt.Sprintf("/admin/users/%d/link", ai.ID), nil); res.StatusCode != http.StatusBadRequest {
+		t.Errorf("invite link for an AI user: %d", res.StatusCode)
+	}
+
+	e.store.Suggest(ctx, "de", "hello", "Hallo {name}!", ai.ID)
+	e.store.Suggest(ctx, "de", "bye", "Tschüss {oops}", ai.ID)
+	if _, body := e.get(tr, "/t/de?filter=all"); !strings.Contains(body, "1 suggestion</span>") {
+		t.Error("list shows no suggestion tag")
+	}
+	_, body := e.get(tr, "/t/de/hello")
+	if !strings.Contains(body, "Hallo {name}!") || !strings.Contains(body, ">Use</button>") || strings.Contains(body, "Use &amp; approve") {
+		t.Error("editor suggestions for translators")
+	}
+
+	id := entrySuggestion(t, e, "hello")
+	if res := e.post(tr, fmt.Sprintf("/t/de/hello/suggestions/%d/use", id), url.Values{"base": {"0"}}); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("use: %d", res.StatusCode)
+	}
+	if en, _ := e.store.Entry(ctx, "de", "hello"); en.Text != "Hallo {name}!" || en.UserID != ai.ID || en.Origin != "machine" {
+		t.Errorf("used: %+v", en.Row)
+	}
+	// Suggestions with errors can't be used.
+	e.post(tr, fmt.Sprintf("/t/de/bye/suggestions/%d/use", entrySuggestion(t, e, "bye")), url.Values{"base": {"0"}})
+	if en, _ := e.store.Entry(ctx, "de", "bye"); en.Has {
+		t.Errorf("broken suggestion used: %+v", en.Row)
+	}
+	if res := e.post(tr, fmt.Sprintf("/t/de/bye/suggestions/%d/dismiss", entrySuggestion(t, e, "bye")), nil); res.StatusCode != http.StatusForbidden {
+		t.Errorf("translator dismiss: %d", res.StatusCode)
+	}
+}
+
+func entrySuggestion(t *testing.T, e *env, key string) int64 {
+	t.Helper()
+	en, err := e.store.Entry(context.Background(), "de", key)
+	if err != nil || len(en.Suggestions) == 0 {
+		t.Fatalf("no suggestion for %s: %v", key, err)
+	}
+	return en.Suggestions[0].ID
+}
