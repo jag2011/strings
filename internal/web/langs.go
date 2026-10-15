@@ -1,6 +1,9 @@
 package web
 
-import "strings"
+import (
+	"io/fs"
+	"strings"
+)
 
 // Display names for common languages. Unknown codes show as the code itself.
 var langNames = map[string]string{
@@ -20,6 +23,48 @@ var langNames = map[string]string{
 	"sw": "Swahili", "ta": "Tamil", "te": "Telugu", "th": "Thai", "tl": "Tagalog",
 	"tr": "Turkish", "uk": "Ukrainian", "ur": "Urdu", "uz": "Uzbek", "vi": "Vietnamese",
 	"zh": "Chinese", "zu": "Zulu",
+}
+
+// Flags for languages, by the country most associated with them. Languages
+// without one (like Esperanto) get a blank placeholder. A region in the code
+// (pt_BR) takes precedence when its flag is bundled.
+var langFlags = map[string]string{
+	"af": "za", "am": "et", "ar": "sa", "az": "az", "be": "by", "bg": "bg", "bn": "bd", "bs": "ba",
+	"ca": "es-ct", "cs": "cz", "cy": "gb-wls", "da": "dk", "de": "de", "el": "gr", "en": "gb",
+	"es": "es", "et": "ee", "eu": "es-pv", "fa": "ir", "fi": "fi", "fil": "ph", "fr": "fr", "ga": "ie",
+	"gl": "es-ga", "gu": "in", "he": "il", "hi": "in", "hr": "hr", "hu": "hu", "hy": "am", "id": "id",
+	"is": "is", "it": "it", "ja": "jp", "ka": "ge", "kk": "kz", "km": "kh", "kn": "in", "ko": "kr",
+	"lo": "la", "lt": "lt", "lv": "lv", "mk": "mk", "ml": "in", "mn": "mn", "mr": "in", "ms": "my",
+	"my": "mm", "nb": "no", "ne": "np", "nl": "nl", "nn": "no", "no": "no", "pa": "in", "pl": "pl",
+	"pt": "pt", "ro": "ro", "ru": "ru", "si": "lk", "sk": "sk", "sl": "si", "sq": "al", "sr": "rs",
+	"sv": "se", "sw": "tz", "ta": "in", "te": "in", "th": "th", "tl": "ph", "tr": "tr", "uk": "ua",
+	"ur": "pk", "uz": "uz", "vi": "vn", "zh": "cn", "zu": "za",
+}
+
+// bundledFlags is the set of flag files in static/flags, by country code.
+var bundledFlags = func() map[string]bool {
+	m := map[string]bool{}
+	entries, _ := fs.ReadDir(staticFS, "static/flags")
+	for _, e := range entries {
+		if c, ok := strings.CutSuffix(e.Name(), ".svg"); ok {
+			m[c] = true
+		}
+	}
+	return m
+}()
+
+// flag returns the static path of the flag for a language code, or "".
+func flag(code string) string {
+	parts := strings.Split(code, "_")
+	for _, p := range parts[1:] {
+		if c := strings.ToLower(p); len(p) == 2 && bundledFlags[c] {
+			return "flags/" + c + ".svg"
+		}
+	}
+	if c, ok := langFlags[parts[0]]; ok && bundledFlags[c] {
+		return "flags/" + c + ".svg"
+	}
+	return ""
 }
 
 var scriptNames = map[string]string{"Hans": "Simplified", "Hant": "Traditional", "Latn": "Latin", "Cyrl": "Cyrillic"}

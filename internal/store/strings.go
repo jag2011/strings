@@ -437,32 +437,36 @@ func (s *Store) Stats(ctx context.Context) ([]LangStats, error) {
 	return out, rows.Err()
 }
 
-// Filters for the string list.
+// Filters for the string list, in tab order.
 const (
-	FilterTodo       = "todo" // missing or outdated
-	FilterMissing    = "missing"
-	FilterOutdated   = "outdated"
-	FilterDone       = "done"
-	FilterUnapproved = "unapproved" // done, waiting for a proofreader
+	FilterTodo       = "todo"       // missing or outdated
+	FilterUnapproved = "unapproved" // up to date, waiting for a proofreader
 	FilterAll        = "all"
 )
 
-var Filters = []string{FilterTodo, FilterMissing, FilterOutdated, FilterDone, FilterUnapproved, FilterAll}
+var Filters = []string{FilterTodo, FilterUnapproved, FilterAll}
 
 func filterSQL(filter string) string {
 	switch filter {
 	case FilterTodo:
 		return "(t.key IS NULL OR t.source_hash != s.hash)"
-	case FilterMissing:
-		return "t.key IS NULL"
-	case FilterOutdated:
-		return "t.source_hash != s.hash"
-	case FilterDone:
-		return "t.source_hash = s.hash"
 	case FilterUnapproved:
 		return "t.source_hash = s.hash AND t.approved_by IS NULL"
 	}
 	return "1"
+}
+
+// FilterCounts returns the number of strings matching q under each filter.
+func (s *Store) FilterCounts(ctx context.Context, lang, q string) (map[string]int, error) {
+	search, sargs := searchSQL(q)
+	var todo, unapproved, all int
+	err := s.r.QueryRowContext(ctx, `SELECT
+		coalesce(sum(`+filterSQL(FilterTodo)+`), 0),
+		coalesce(sum(`+filterSQL(FilterUnapproved)+`), 0),
+		count(*)
+		FROM source_strings s LEFT JOIN translations t ON t.key = s.key AND t.lang = ?
+		WHERE s.removed = 0 AND s.draft = 0`+search, append([]any{lang}, sargs...)...).Scan(&todo, &unapproved, &all)
+	return map[string]int{FilterTodo: todo, FilterUnapproved: unapproved, FilterAll: all}, err
 }
 
 type Row struct {

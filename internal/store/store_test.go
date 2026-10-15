@@ -144,8 +144,15 @@ func TestListAndNext(t *testing.T) {
 	if _, n, _ := s.List(ctx, "de", FilterAll, "%", 0, 10); n != 1 {
 		t.Errorf("search for %% should match only c literally, got %d", n)
 	}
-	if _, n, _ := s.List(ctx, "de", FilterDone, "zwei", 0, 10); n != 1 {
+	if _, n, _ := s.List(ctx, "de", FilterUnapproved, "zwei", 0, 10); n != 1 {
 		t.Errorf("search in translations: %d", n)
+	}
+	counts, err := s.FilterCounts(ctx, "de", "")
+	if err != nil || counts[FilterTodo] != 3 || counts[FilterUnapproved] != 1 || counts[FilterAll] != 4 {
+		t.Errorf("filter counts: %v %v", counts, err)
+	}
+	if counts, _ := s.FilterCounts(ctx, "de", "zwei"); counts[FilterTodo] != 0 || counts[FilterAll] != 1 {
+		t.Errorf("filter counts with search: %v", counts)
 	}
 	next, _ := s.Next(ctx, "de", FilterTodo, "", "c", 2)
 	if next != "d" {

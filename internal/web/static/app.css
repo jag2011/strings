@@ -137,6 +137,11 @@ form.grid .span { grid-column: 1 / -1; }
 }
 .langs a:hover { border-color: var(--accent); text-decoration: none; }
 .lang-name code { color: var(--muted); }
+.flag {
+  display: inline-block; width: 20px; height: 15px; margin-right: 10px; vertical-align: -2px;
+  border-radius: 3px; object-fit: cover; background: var(--line);
+  outline: 1px solid color-mix(in srgb, var(--text) 10%, transparent); outline-offset: -1px;
+}
 .bar { height: 8px; border-radius: 4px; background: color-mix(in srgb, var(--missing) 25%, var(--line)); overflow: hidden; }
 .bar-done { display: block; height: 100%; background: var(--done); }
 .counts { display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
@@ -163,6 +168,11 @@ form.grid .span { grid-column: 1 / -1; }
 .tabs a { padding: 4px 12px; border-radius: 6px; color: var(--muted); }
 .tabs a:hover { text-decoration: none; color: var(--text); }
 .tabs a[aria-current] { background: var(--surface); color: var(--text); font-weight: 600; }
+.badge {
+  display: inline-block; min-width: 1.6em; margin-left: 2px; padding: 0 6px; border-radius: 10px;
+  font-size: 12px; line-height: 1.6; text-align: center; font-weight: 500; font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--muted) 15%, transparent);
+}
 
 table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
 th, td { text-align: left; vertical-align: top; padding: 8px 12px; border-bottom: 1px solid var(--line); }

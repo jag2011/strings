@@ -3,16 +3,17 @@
 <p class="crumbs"><a href="/">Languages</a> /</p>
 <h1>{{langName $d.Lang}} <code>{{$d.Lang}}</code></h1>
 
-<form class="toolbar" method="get">
+<form class="toolbar" method="get" data-search>
   <nav class="tabs" aria-label="Filter">
   {{range $d.Filters}}
-    <a href="/t/{{$d.Lang}}{{query "filter" . "q" $d.Q}}" {{if eq . $d.Filter}}aria-current="page"{{end}}>{{.}}</a>
+    <a href="/t/{{$d.Lang}}{{query "filter" . "q" $d.Q}}" {{if eq . $d.Filter}}aria-current="page"{{end}}>{{.}} <span class="badge">{{index $d.Counts .}}</span></a>
   {{end}}
   </nav>
   <input type="hidden" name="filter" value="{{$d.Filter}}">
   <input type="search" name="q" value="{{$d.Q}}" placeholder="Search keys and text" aria-label="Search">
 </form>
 
+<div data-results>
 <p class="muted small">{{$d.Count}} {{plural $d.Count "string" "strings"}}{{if gt $d.Pages 1}} · page {{$d.Page}} of {{$d.Pages}}{{end}}
 {{if $d.Rows}}{{with index $d.Rows 0}} · <a href="/t/{{$d.Lang}}/{{esc .Key}}{{query "filter" $d.Filter "q" $d.Q}}">Start translating →</a>{{end}}{{end}}</p>
 
@@ -43,4 +44,5 @@
   {{if lt $d.Page $d.Pages}}<a href="/t/{{$d.Lang}}{{query "filter" $d.Filter "q" $d.Q "page" (print (add $d.Page 1))}}">Next →</a>{{end}}
 </nav>
 {{end}}
+</div>
 {{end}}

@@ -49,6 +49,37 @@
     });
   }
 
+  // Filter the list while typing: fetch the same page with the new query and
+  // swap in the results. Enter still submits the form normally.
+  const search = document.querySelector("[data-search]");
+  if (search) {
+    const input = search.querySelector("input[type=search]");
+    let timer, pending;
+    const update = async () => {
+      const url = new URL(search.action);
+      url.search = new URLSearchParams(new FormData(search));
+      if (!input.value.trim()) url.searchParams.delete("q");
+      pending?.abort();
+      pending = new AbortController();
+      try {
+        const res = await fetch(url, { signal: pending.signal });
+        if (!res.ok) return;
+        const doc = new DOMParser().parseFromString(await res.text(), "text/html");
+        for (const sel of ["[data-results]", ".tabs"]) {
+          const next = doc.querySelector(sel);
+          if (next) document.querySelector(sel)?.replaceWith(next);
+        }
+        history.replaceState(null, "", url);
+      } catch (e) {
+        if (e.name !== "AbortError") throw e;
+      }
+    };
+    input.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(update, 200);
+    });
+  }
+
   // Click to select tokens and links meant for copying.
   for (const el of document.querySelectorAll("[data-select]")) {
     el.addEventListener("focus", () => el.select());

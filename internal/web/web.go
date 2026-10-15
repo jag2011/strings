@@ -59,6 +59,7 @@ func New(s *store.Store) (*Server, error) {
 		"static":   func(name string) string { return "/static/" + name + "?v=" + srv.static },
 		"date":     func(s string) string { return s[:min(len(s), 16)] + " UTC" },
 		"langName": langName,
+		"flag":     flag,
 		"add":      func(a, b int) int { return a + b },
 		"diff":     diffText,
 		// For the textarea: lang enables the browser's spell checker in the

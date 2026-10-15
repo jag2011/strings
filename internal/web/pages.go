@@ -39,6 +39,7 @@ func (srv *Server) home(w http.ResponseWriter, r *http.Request, u *store.User) e
 type listData struct {
 	Lang, Filter, Q string
 	Filters         []string
+	Counts          map[string]int // per filter, with the search applied
 	Rows            []store.Row
 	Count           int
 	Page, Pages     int
@@ -58,6 +59,9 @@ func (srv *Server) list(w http.ResponseWriter, r *http.Request, u *store.User) e
 	d.Page = max(d.Page, 1)
 	rows, count, err := srv.store.List(r.Context(), lang, d.Filter, d.Q, (d.Page-1)*pageSize, pageSize)
 	if err != nil {
+		return err
+	}
+	if d.Counts, err = srv.store.FilterCounts(r.Context(), lang, d.Q); err != nil {
 		return err
 	}
 	d.Rows, d.Count = rows, count
