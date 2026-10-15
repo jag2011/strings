@@ -13,7 +13,7 @@
 
 <section class="card">
   <h2>Add user</h2>
-  <form method="post" action="/admin/users" class="inline">
+  <form method="post" action="{{base}}/admin/users" class="inline">
     <input type="email" name="email" placeholder="Email" required aria-label="Email">
     <input name="name" placeholder="Name (shown in credits)" required aria-label="Name">
     <select name="role" aria-label="Role">
@@ -44,14 +44,14 @@
       {{if .External}}<span class="tag">{{$d.App}}</span>{{else if not .HasPassword}}<span class="tag">invited</span>{{end}}
     </td>
     <td class="nowrap">
-      <form id="u{{.ID}}" method="post" action="/admin/users/{{.ID}}" class="inline-form"><button class="small">Save</button></form>
+      <form id="u{{.ID}}" method="post" action="{{base}}/admin/users/{{.ID}}" class="inline-form"><button class="small">Save</button></form>
       {{$link := or .HasPassword (not .External)}}{{$merge := ne .ID $.User.ID}}
       {{if or $link $merge}}
       <details class="menu">
         <summary class="button small" title="More actions" aria-label="More actions for {{.Name}}">⋮</summary>
         <div class="menu-items">
-          {{if $link}}<form method="post" action="/admin/users/{{.ID}}/link"><button>{{if .HasPassword}}Reset link{{else}}New invite link{{end}}</button></form>{{end}}
-          {{if $merge}}<a href="/admin/users/{{.ID}}/merge">Merge into another user…</a>{{end}}
+          {{if $link}}<form method="post" action="{{base}}/admin/users/{{.ID}}/link"><button>{{if .HasPassword}}Reset link{{else}}New invite link{{end}}</button></form>{{end}}
+          {{if $merge}}<a href="{{base}}/admin/users/{{.ID}}/merge">Merge into another user…</a>{{end}}
         </div>
       </details>
       {{end}}

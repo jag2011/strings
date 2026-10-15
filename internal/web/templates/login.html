@@ -1,5 +1,5 @@
 {{define "content"}}
-<form class="narrow card" method="post" action="/login">
+<form class="narrow card" method="post" action="{{base}}/login">
   <h1>Log in</h1>
   {{with .Data.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
   <input type="hidden" name="next" value="{{.Data.Next}}">

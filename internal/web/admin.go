@@ -272,12 +272,12 @@ func (srv *Server) adminUsers(w http.ResponseWriter, r *http.Request, u *store.U
 	return srv.renderUsers(w, r, u, http.StatusOK, usersData{})
 }
 
-func baseURL(r *http.Request) string {
+func (srv *Server) baseURL(r *http.Request) string {
 	scheme := "http"
 	if secure(r) {
 		scheme = "https"
 	}
-	return scheme + "://" + r.Host
+	return scheme + "://" + r.Host + srv.Base
 }
 
 func (srv *Server) adminCreateUser(w http.ResponseWriter, r *http.Request, u *store.User) error {
@@ -289,7 +289,7 @@ func (srv *Server) adminCreateUser(w http.ResponseWriter, r *http.Request, u *st
 	if err != nil {
 		return err
 	}
-	return srv.renderUsers(w, r, u, http.StatusOK, usersData{Link: baseURL(r) + "/invite/" + token, For: nu})
+	return srv.renderUsers(w, r, u, http.StatusOK, usersData{Link: srv.baseURL(r) + "/invite/" + token, For: nu})
 }
 
 func (srv *Server) adminUpdateUser(w http.ResponseWriter, r *http.Request, u *store.User) error {
@@ -311,7 +311,7 @@ func (srv *Server) adminUserLink(w http.ResponseWriter, r *http.Request, u *stor
 	if err != nil {
 		return err
 	}
-	return srv.renderUsers(w, r, u, http.StatusOK, usersData{Link: baseURL(r) + "/invite/" + token, For: target})
+	return srv.renderUsers(w, r, u, http.StatusOK, usersData{Link: srv.baseURL(r) + "/invite/" + token, For: target})
 }
 
 type mergeData struct {

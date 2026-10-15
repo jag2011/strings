@@ -23,15 +23,18 @@ import (
 const usage = `stringsd: the strings server, minimalistic string management
 
 Usage:
-  stringsd serve  [-db strings.db] [-addr :8080] [-trust-proxy]
+  stringsd serve  [-db strings.db] [-addr :8080] [-base /strings] [-trust-proxy]
   stringsd user   [-db strings.db] [-admin | -proofreader] [-url http://localhost:8080] <email> <name>
   stringsd import [-db strings.db] <file.arb>...
   stringsd export [-db strings.db] [-out .]
   stringsd token  [-db strings.db] <name>
+  stringsd backup [-db strings.db] <out.db>
 
 The database path can also be set with STRINGS_DB, the listen address with
-STRINGS_ADDR. Behind a load balancer that appends X-Forwarded-For, set
--trust-proxy (or STRINGS_TRUST_PROXY=1) so login limits apply per client.
+STRINGS_ADDR. -base (or STRINGS_BASE) serves the app under a path, like
+/strings, instead of the root. Behind a load balancer that appends
+X-Forwarded-For, set -trust-proxy (or STRINGS_TRUST_PROXY=1) so login limits
+apply per client.
 
 Sign-in links from an external account server (see README) are enabled with
 STRINGS_AUTH_URL (the code exchange endpoint), STRINGS_AUTH_SECRET and
@@ -53,12 +56,17 @@ func main() {
 	switch cmd {
 	case "serve":
 		addr := fs.String("addr", envOr("STRINGS_ADDR", ":8080"), "listen address")
+		base := fs.String("base", os.Getenv("STRINGS_BASE"), "path to serve under, like /strings")
 		trustProxy := fs.Bool("trust-proxy", os.Getenv("STRINGS_TRUST_PROXY") == "1", "take the client IP from X-Forwarded-For")
 		fs.Parse(args)
+		*base = strings.TrimSuffix(*base, "/")
+		if *base != "" && (!strings.HasPrefix(*base, "/") || strings.Contains(*base, "//")) {
+			log.Fatalf("stringsd: -base must be a path like /strings, not %q", *base)
+		}
 		var ext *web.External
 		ext, err = externalFromEnv()
 		if err == nil {
-			err = serve(*dbPath, *addr, ext, *trustProxy)
+			err = serve(*dbPath, *addr, *base, ext, *trustProxy)
 		}
 	case "user":
 		admin := fs.Bool("admin", false, "make the user an admin")
@@ -95,6 +103,15 @@ func main() {
 				fmt.Println(t)
 			}
 			return err
+		})
+	case "backup":
+		fs.Parse(args)
+		if fs.NArg() != 1 {
+			fs.Usage()
+			os.Exit(2)
+		}
+		err = withStore(*dbPath, func(s *store.Store) error {
+			return s.Backup(context.Background(), fs.Arg(0))
 		})
 	case "help", "-h", "--help":
 		fmt.Print(usage)
@@ -134,13 +151,14 @@ func externalFromEnv() (*web.External, error) {
 	return x, nil
 }
 
-func serve(dbPath, addr string, ext *web.External, trustProxy bool) error {
+func serve(dbPath, addr, base string, ext *web.External, trustProxy bool) error {
 	return withStore(dbPath, func(s *store.Store) error {
 		srv, err := web.New(s, ext)
 		if err != nil {
 			return err
 		}
 		srv.TrustProxy = trustProxy
+		srv.Base = base
 		hs := &http.Server{
 			Addr:              addr,
 			Handler:           srv.Handler(),
@@ -159,7 +177,7 @@ func serve(dbPath, addr string, ext *web.External, trustProxy bool) error {
 			defer cancel()
 			hs.Shutdown(shut)
 		}()
-		log.Printf("stringsd: serving %s on %s", dbPath, addr)
+		log.Printf("stringsd: serving %s on %s%s", dbPath, addr, base)
 		if ext != nil {
 			log.Printf("stringsd: sign-in links from %s (%s)", ext.Name, ext.URL)
 		}

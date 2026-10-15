@@ -1,6 +1,6 @@
 {{define "content"}}
 {{$d := .Data}}{{$e := $d.Entry}}{{$canApprove := .User.CanApprove}}
-<p class="crumbs"><a href="/">Languages</a> / <a href="{{$d.ListURL}}">{{langName $d.Lang}}</a> /</p>
+<p class="crumbs"><a href="{{base}}/">Languages</a> / <a href="{{base}}{{$d.ListURL}}">{{langName $d.Lang}}</a> /</p>
 <h1 class="key-title">{{$e.Key}}</h1>
 
 <section class="source card">
@@ -54,7 +54,7 @@
     {{end}}
     <button type="button" data-copy-source hidden>Copy source</button>
     {{end}}
-    {{with $d.NextKey}}<a class="skip" href="/t/{{$d.Lang}}/{{esc .}}{{query "filter" $d.Filter "q" $d.Q}}">Skip →</a>{{end}}
+    {{with $d.NextKey}}<a class="skip" href="{{base}}/t/{{$d.Lang}}/{{esc .}}{{query "filter" $d.Filter "q" $d.Q}}">Skip →</a>{{end}}
   </div>
   <p class="muted small hint" hidden data-hint><kbd>Ctrl</kbd>+<kbd>Enter</kbd> saves and opens the next string.</p>
 </form>
@@ -72,7 +72,7 @@
         {{if .Current}}· <strong>current</strong>{{end}}
       </p>
       {{if not (or .Current $e.Approved)}}
-      <form method="post" action="/t/{{$d.Lang}}/{{esc $e.Key}}/revert/{{.ID}}">
+      <form method="post" action="{{base}}/t/{{$d.Lang}}/{{esc $e.Key}}/revert/{{.ID}}">
         <input type="hidden" name="filter" value="{{$d.Filter}}">
         <input type="hidden" name="q" value="{{$d.Q}}">
         <button class="small">Restore</button>

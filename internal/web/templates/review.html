@@ -1,6 +1,6 @@
 {{define "content"}}
 {{$d := .Data}}{{$x := $d.Diff}}
-<p class="crumbs"><a href="/admin">Settings</a> /</p>
+<p class="crumbs"><a href="{{base}}/admin">Settings</a> /</p>
 <h1>Review import</h1>
 {{with $d.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
 
@@ -30,7 +30,7 @@
   {{with $d.Others}}<p class="muted small">Imported along with it: {{range $i, $f := .}}{{if $i}}, {{end}}{{$f}}{{end}}</p>{{end}}
 </section>
 
-<form method="post" action="/admin/import/{{$d.ID}}">
+<form method="post" action="{{base}}/admin/import/{{$d.ID}}">
   <input type="hidden" name="revision" value="{{$x.Revision}}">
   {{with $x.Changed}}
   <h2>Changed strings</h2>
@@ -61,7 +61,7 @@
   {{end}}
   <div class="actions">
     <button class="primary">Import</button>
-    <button formaction="/admin/import/{{$d.ID}}/cancel">Cancel</button>
+    <button formaction="{{base}}/admin/import/{{$d.ID}}/cancel">Cancel</button>
   </div>
 </form>
 {{end}}

@@ -9,17 +9,17 @@
 </head>
 <body>
 <header class="top">
-  <a class="brand" href="/">{{.Settings.name}}</a>
+  <a class="brand" href="{{base}}/">{{.Settings.name}}</a>
   {{with .User}}
   <nav>
-    <a href="/" {{if eq $.Nav "home"}}aria-current="page"{{end}}>Languages</a>
-    <a href="/activity" {{if eq $.Nav "activity"}}aria-current="page"{{end}}>Activity</a>
-    <a href="/account" {{if eq $.Nav "account"}}aria-current="page"{{end}}>My edits</a>
+    <a href="{{base}}/" {{if eq $.Nav "home"}}aria-current="page"{{end}}>Languages</a>
+    <a href="{{base}}/activity" {{if eq $.Nav "activity"}}aria-current="page"{{end}}>Activity</a>
+    <a href="{{base}}/account" {{if eq $.Nav "account"}}aria-current="page"{{end}}>My edits</a>
     {{if .IsAdmin}}
-    <a href="/admin" {{if eq $.Nav "admin"}}aria-current="page"{{end}}>Settings</a>
-    <a href="/admin/users" {{if or (eq $.Nav "users") (eq $.Nav "merge")}}aria-current="page"{{end}}>Users</a>
+    <a href="{{base}}/admin" {{if eq $.Nav "admin"}}aria-current="page"{{end}}>Settings</a>
+    <a href="{{base}}/admin/users" {{if or (eq $.Nav "users") (eq $.Nav "merge")}}aria-current="page"{{end}}>Users</a>
     {{end}}
-    <form method="post" action="/logout"><button class="link" title="Log out {{.Email}}">Log out</button></form>
+    <form method="post" action="{{base}}/logout"><button class="link" title="Log out {{.Email}}">Log out</button></form>
   </nav>
   {{end}}
 </header>

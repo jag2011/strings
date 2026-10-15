@@ -1,22 +1,22 @@
 {{define "content"}}
 {{$d := .Data}}
-<p class="crumbs"><a href="/">Languages</a> /</p>
+<p class="crumbs"><a href="{{base}}/">Languages</a> /</p>
 <h1>{{langName $d.Lang}} <code>{{$d.Lang}}</code></h1>
 
 <form class="toolbar" method="get" data-search>
   <nav class="tabs" aria-label="Filter">
   {{range $d.Filters}}
-    <a href="/t/{{$d.Lang}}{{query "filter" . "q" $d.Q}}" {{if eq . $d.Filter}}aria-current="page"{{end}}>{{.}} <span class="badge">{{index $d.Counts .}}</span></a>
+    <a href="{{base}}/t/{{$d.Lang}}{{query "filter" . "q" $d.Q}}" {{if eq . $d.Filter}}aria-current="page"{{end}}>{{.}} <span class="badge">{{index $d.Counts .}}</span></a>
   {{end}}
   </nav>
-  <a class="toolbar-link" href="/activity?lang={{$d.Lang}}">Activity</a>
+  <a class="toolbar-link" href="{{base}}/activity?lang={{$d.Lang}}">Activity</a>
   <input type="hidden" name="filter" value="{{$d.Filter}}">
   <input type="search" name="q" value="{{$d.Q}}" placeholder="Search keys and text" aria-label="Search">
 </form>
 
 <div data-results>
 <p class="muted small">{{$d.Count}} {{plural $d.Count "string" "strings"}}{{if gt $d.Pages 1}} · page {{$d.Page}} of {{$d.Pages}}{{end}}
-{{if $d.Rows}}{{with index $d.Rows 0}} · <a href="/t/{{$d.Lang}}/{{esc .Key}}{{query "filter" $d.Filter "q" $d.Q}}">Start translating →</a>{{end}}{{end}}</p>
+{{if $d.Rows}}{{with index $d.Rows 0}} · <a href="{{base}}/t/{{$d.Lang}}/{{esc .Key}}{{query "filter" $d.Filter "q" $d.Q}}">Start translating →</a>{{end}}{{end}}</p>
 
 {{if not $d.Rows}}
   <p class="empty">{{if eq $d.Filter "todo"}}All done here. Nothing missing or outdated.{{else if eq $d.Filter "unapproved"}}Nothing waiting for approval.{{else}}No strings match.{{end}}</p>
@@ -26,7 +26,7 @@
   <tbody>
   {{range $d.Rows}}
   <tr id="{{.Key}}" class="{{.State}}">
-    <td class="key"><a href="/t/{{$d.Lang}}/{{esc .Key}}{{query "filter" $d.Filter "q" $d.Q}}">{{.Key}}</a></td>
+    <td class="key"><a href="{{base}}/t/{{$d.Lang}}/{{esc .Key}}{{query "filter" $d.Filter "q" $d.Q}}">{{.Key}}</a></td>
     <td><span class="text">{{.Source}}</span></td>
     <td lang="{{bcp47 $d.Lang}}" dir="{{dir $d.Lang}}">
       {{- if .Has}}<span class="text">{{.Text}}</span>{{else}}<span class="tag missing">missing</span>{{end}}
@@ -41,8 +41,8 @@
 
 {{if gt $d.Pages 1}}
 <nav class="pager">
-  {{if gt $d.Page 1}}<a href="/t/{{$d.Lang}}{{query "filter" $d.Filter "q" $d.Q "page" (print (add $d.Page -1))}}">← Previous</a>{{end}}
-  {{if lt $d.Page $d.Pages}}<a href="/t/{{$d.Lang}}{{query "filter" $d.Filter "q" $d.Q "page" (print (add $d.Page 1))}}">Next →</a>{{end}}
+  {{if gt $d.Page 1}}<a href="{{base}}/t/{{$d.Lang}}{{query "filter" $d.Filter "q" $d.Q "page" (print (add $d.Page -1))}}">← Previous</a>{{end}}
+  {{if lt $d.Page $d.Pages}}<a href="{{base}}/t/{{$d.Lang}}{{query "filter" $d.Filter "q" $d.Q "page" (print (add $d.Page 1))}}">Next →</a>{{end}}
 </nav>
 {{end}}
 </div>

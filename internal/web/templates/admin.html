@@ -18,7 +18,7 @@
         {{with .Trans.Unknown}}<br><span class="muted small">{{len .}} keys not in the source, ignored</span>{{end}}
         {{with .Trans.Invalid}}<br><span class="error-text small">{{len .}} failed validation, not imported: {{range $i, $k := .}}{{if $i}}, {{end}}{{$k}}{{end}}</span>{{end}}
         {{with .Trans.Untranslated}}<br><span class="muted small">{{len .}} same as the source text, left missing</span>{{end}}
-        {{with .Trans.Empty}}<br><span class="muted small">{{len .}} empty, left missing: {{range $i, $k := .}}{{if $i}}, {{end}}<a href="/t/{{$r.Lang}}/{{esc $k}}">{{$k}}</a>{{end}}</span>{{end}}
+        {{with .Trans.Empty}}<br><span class="muted small">{{len .}} empty, left missing: {{range $i, $k := .}}{{if $i}}, {{end}}<a href="{{base}}/t/{{$r.Lang}}/{{esc $k}}">{{$k}}</a>{{end}}</span>{{end}}
         {{with .Trans.Warned}}<br><span class="muted small">{{len .}} imported with warnings: {{range $i, $k := .}}{{if $i}}, {{end}}{{$k}}{{end}}</span>{{end}}
       {{end}}
     </li>
@@ -37,7 +37,7 @@
 
 <section class="card" id="general">
   <h2>General</h2>
-  <form method="post" action="/admin/settings" class="grid">
+  <form method="post" action="{{base}}/admin/settings" class="grid">
     <label>Name <input name="name" value="{{$s.name}}" required></label>
     <label>Accent color <input type="color" name="accent" value="{{$s.accent}}"></label>
     <label>Source language <input name="source_lang" value="{{$s.source_lang}}" required pattern="[a-z]{2,3}(_[A-Za-z0-9]+)*"></label>
@@ -53,12 +53,12 @@
   <ul class="chips">
     {{range $d.Languages}}
     <li>{{langName .}} <code>{{.}}</code>
-      <form method="post" action="/admin/languages/{{.}}/remove"><button class="link small" title="Remove {{.}}" data-confirm="Remove {{langName .}}? Its translations are kept.">×</button></form>
+      <form method="post" action="{{base}}/admin/languages/{{.}}/remove"><button class="link small" title="Remove {{.}}" data-confirm="Remove {{langName .}}? Its translations are kept.">×</button></form>
     </li>
     {{end}}
   </ul>
   {{end}}
-  <form method="post" action="/admin/languages" class="inline">
+  <form method="post" action="{{base}}/admin/languages" class="inline">
     <input name="code" placeholder="de, pt_BR, zh_Hant" required aria-label="Language code">
     <button>Add language</button>
   </form>
@@ -70,7 +70,7 @@
      The {{langName $s.source_lang}} file becomes the source. The others seed translations and add their language;
      strings edited here are never overwritten. A new source file is shown for review before it is imported.
      The source is at revision {{$s.source_revision}}.</p>
-  <form method="post" action="/admin/import" enctype="multipart/form-data" class="inline">
+  <form method="post" action="{{base}}/admin/import" enctype="multipart/form-data" class="inline">
     <input type="file" name="files" accept=".arb" multiple required>
     <button>Import</button>
   </form>
@@ -78,10 +78,10 @@
 
 <section class="card" id="export">
   <h2>Export</h2>
-  <p><a class="button" href="/export.zip">Download all as zip</a></p>
+  <p><a class="button" href="{{base}}/export.zip">Download all as zip</a></p>
   <ul class="plain columns">
-    <li><a href="/export/{{$s.file_prefix}}{{$s.source_lang}}.arb">{{$s.file_prefix}}{{$s.source_lang}}.arb</a> <span class="muted small">source</span></li>
-    {{range $d.Languages}}<li><a href="/export/{{$s.file_prefix}}{{.}}.arb">{{$s.file_prefix}}{{.}}.arb</a></li>{{end}}
+    <li><a href="{{base}}/export/{{$s.file_prefix}}{{$s.source_lang}}.arb">{{$s.file_prefix}}{{$s.source_lang}}.arb</a> <span class="muted small">source</span></li>
+    {{range $d.Languages}}<li><a href="{{base}}/export/{{$s.file_prefix}}{{.}}.arb">{{$s.file_prefix}}{{.}}.arb</a></li>{{end}}
   </ul>
 </section>
 
@@ -92,12 +92,12 @@
   <ul class="plain">
     {{range $d.Tokens}}
     <li>{{.Name}} <span class="muted small">created {{date .CreatedAt}}</span>
-      <form method="post" action="/admin/tokens/{{.ID}}/delete" class="inline-form"><button class="link small" data-confirm="Revoke {{.Name}}?">Revoke</button></form>
+      <form method="post" action="{{base}}/admin/tokens/{{.ID}}/delete" class="inline-form"><button class="link small" data-confirm="Revoke {{.Name}}?">Revoke</button></form>
     </li>
     {{end}}
   </ul>
   {{end}}
-  <form method="post" action="/admin/tokens" class="inline">
+  <form method="post" action="{{base}}/admin/tokens" class="inline">
     <input name="name" placeholder="e.g. CI sync" required aria-label="Token name">
     <button>Create token</button>
   </form>

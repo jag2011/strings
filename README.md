@@ -161,8 +161,14 @@ STRINGS_AUTH_NAME="My App"     # shown on the login page
 - If the proxy appends the client IP to `X-Forwarded-For` (AWS load balancers
   do), set `STRINGS_TRUST_PROXY=1` so login limits apply per client rather than
   per proxy.
+- To share a host with other apps, serve strings under a path with
+  `STRINGS_BASE=/strings`: the proxy forwards `/strings/*` unchanged and links,
+  redirects and cookies get the prefix. API clients and sign-in links then
+  use `https://example.com/strings` as the base URL.
 - `GET /health` returns 200 while the database answers, for load balancer
-  health checks.
+  health checks. With a base path it is also served at the root.
+- `stringsd backup <out.db>` writes a consistent single-file copy of the
+  database, also while the server runs.
 - [`deploy/strings.service`](deploy/strings.service) is a systemd unit that
   keeps the database in `/var/lib/strings` and reads secrets from
   `/etc/strings/strings.env`.

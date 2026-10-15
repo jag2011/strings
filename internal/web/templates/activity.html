@@ -1,7 +1,7 @@
 {{define "content"}}
 {{$d := .Data}}
 {{if $d.Lang}}
-<p class="crumbs"><a href="/">Languages</a> / <a href="/t/{{$d.Lang}}">{{langName $d.Lang}}</a> /</p>
+<p class="crumbs"><a href="{{base}}/">Languages</a> / <a href="{{base}}/t/{{$d.Lang}}">{{langName $d.Lang}}</a> /</p>
 <h1>Activity <span class="muted">in {{langName $d.Lang}}</span></h1>
 {{else}}
 <h1>Activity</h1>

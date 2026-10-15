@@ -59,6 +59,13 @@ func (s *Store) Close() error {
 	return s.w.Close()
 }
 
+// Backup writes a consistent copy of the database to path, a single file
+// without -wal. It is safe while the server runs; path must not exist.
+func (s *Store) Backup(ctx context.Context, path string) error {
+	_, err := s.w.ExecContext(ctx, "VACUUM INTO ?", path)
+	return err
+}
+
 // Ping checks that the database can be read.
 func (s *Store) Ping(ctx context.Context) error {
 	var one int

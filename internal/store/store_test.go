@@ -500,3 +500,26 @@ func TestMergeUser(t *testing.T) {
 		t.Errorf("merge unknown user: %v", err)
 	}
 }
+
+func TestBackup(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	if err := s.AddLanguage(ctx, "de"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "backup.db")
+	if err := s.Backup(ctx, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Backup(ctx, path); err == nil {
+		t.Fatal("backup over an existing file succeeded")
+	}
+	b, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if ok, err := b.HasLanguage(ctx, "de"); err != nil || !ok {
+		t.Fatalf("backup misses language: %v %v", ok, err)
+	}
+}

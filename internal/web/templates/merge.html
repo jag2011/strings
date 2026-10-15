@@ -1,6 +1,6 @@
 {{define "content"}}
 {{$d := .Data}}
-<p class="crumbs"><a href="/admin/users">Users</a></p>
+<p class="crumbs"><a href="{{base}}/admin/users">Users</a></p>
 <h1>Merge {{$d.From.Name}}</h1>
 {{with $d.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
 <section class="card merge">
@@ -19,7 +19,7 @@
     </label>
     <div class="actions">
       <button class="danger">Merge and delete {{$d.From.Name}}</button>
-      <a class="button" href="/admin/users">Cancel</a>
+      <a class="button" href="{{base}}/admin/users">Cancel</a>
       <span class="muted small">This can't be undone.</span>
     </div>
   </form>

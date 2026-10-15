@@ -12,7 +12,7 @@
     {{if not $d.Mine}}<td>{{with .UserName}}{{.}}{{else}}<span class="muted">—</span>{{end}}</td>{{end}}
     <td class="key">
       {{if not $d.Lang}}<span class="muted">{{.Lang}}</span> {{end}}
-      {{- if .Open}}<a href="/t/{{.Lang}}/{{esc .Key}}">{{.Key}}</a>{{else}}{{.Key}}{{end}}
+      {{- if .Open}}<a href="{{base}}/t/{{.Lang}}/{{esc .Key}}">{{.Key}}</a>{{else}}{{.Key}}{{end}}
     </td>
     <td class="change" lang="{{bcp47 .Lang}}" dir="{{dir .Lang}}">
       {{- if eq .Kind "approved"}}
@@ -37,8 +37,8 @@
 
 {{if or (gt $d.Page 1) $d.More}}
 <nav class="pager">
-  {{if gt $d.Page 1}}<a href="{{$d.Path}}{{query "lang" $d.Lang "page" (print (add $d.Page -1))}}">← Newer</a>{{else}}<span></span>{{end}}
-  {{if $d.More}}<a href="{{$d.Path}}{{query "lang" $d.Lang "page" (print (add $d.Page 1))}}">Older →</a>{{end}}
+  {{if gt $d.Page 1}}<a href="{{base}}{{$d.Path}}{{query "lang" $d.Lang "page" (print (add $d.Page -1))}}">← Newer</a>{{else}}<span></span>{{end}}
+  {{if $d.More}}<a href="{{base}}{{$d.Path}}{{query "lang" $d.Lang "page" (print (add $d.Page 1))}}">Older →</a>{{end}}
 </nav>
 {{end}}
 {{end}}

@@ -1,16 +1,16 @@
 {{define "content"}}
 {{if eq .Data.Total 0}}
   <p class="empty">No strings yet.
-  {{if .User.IsAdmin}}<a href="/admin#import">Import ARB files</a> to get started.{{else}}An admin needs to import them first.{{end}}</p>
+  {{if .User.IsAdmin}}<a href="{{base}}/admin#import">Import ARB files</a> to get started.{{else}}An admin needs to import them first.{{end}}</p>
 {{else}}
 <p class="muted">{{.Data.Total}} strings in {{langName .Data.SourceLang}}.</p>
 {{if not .Data.Stats}}
-  <p class="empty">No languages yet.{{if .User.IsAdmin}} <a href="/admin#languages">Add one</a>.{{end}}</p>
+  <p class="empty">No languages yet.{{if .User.IsAdmin}} <a href="{{base}}/admin#languages">Add one</a>.{{end}}</p>
 {{end}}
 <ul class="langs">
 {{range .Data.Stats}}
   <li>
-    <a href="/t/{{.Lang}}">
+    <a href="{{base}}/t/{{.Lang}}">
       <span class="lang-name">{{with flag .Lang}}<img class="flag" src="{{static .}}" alt="" width="20" height="15">{{else}}<span class="flag"></span>{{end}}{{langName .Lang}} <code>{{.Lang}}</code></span>
       <span class="bar" title="{{.Done}} done, {{.Outdated}} outdated, {{.Missing}} missing">
         <span class="bar-done" style="width: {{.Percent}}%"></span>

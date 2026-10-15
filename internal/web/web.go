@@ -30,6 +30,9 @@ type Server struct {
 	// TrustProxy takes the client IP from the last X-Forwarded-For entry,
 	// which the load balancer appends. Only set it behind a proxy that does.
 	TrustProxy bool
+	// Base is the path the app is served under, like "/strings", or "" for
+	// the root. See underBase.
+	Base string
 
 	store    *store.Store
 	external *External // nil: no sign-in through an account server
@@ -62,7 +65,8 @@ func New(s *store.Store, external *External) (*Server, error) {
 			return template.URL("?" + v.Encode())
 		},
 		"esc":      url.PathEscape,
-		"static":   func(name string) string { return "/static/" + name + "?v=" + srv.static },
+		"static":   func(name string) string { return srv.Base + "/static/" + name + "?v=" + srv.static },
+		"base":     func() string { return srv.Base },
 		"date":     func(s string) string { return s[:min(len(s), 16)] + " UTC" },
 		"langName": langName,
 		"flag":     flag,
@@ -150,8 +154,65 @@ func (srv *Server) Handler() http.Handler {
 
 	// Rejects cross-site form posts (Sec-Fetch-Site / Origin), so forms need
 	// no CSRF tokens. Requests without those headers, like curl, pass.
-	return securityHeaders(http.NewCrossOriginProtection().Handler(mux))
+	h := securityHeaders(http.NewCrossOriginProtection().Handler(mux))
+	if srv.Base == "" {
+		return h
+	}
+	return srv.underBase(h)
 }
+
+// underBase serves h under srv.Base, for sharing a host with other apps
+// behind a proxy. Handlers keep using root paths: the prefix is stripped from
+// requests and added to redirects and cookie paths here, and to links in
+// templates with {{base}}. /health stays at the root for the load balancer.
+func (srv *Server) underBase(h http.Handler) http.Handler {
+	strip := http.StripPrefix(srv.Base, h)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/health":
+			h.ServeHTTP(w, r)
+		case r.URL.Path == srv.Base:
+			http.Redirect(w, r, srv.Base+"/", http.StatusMovedPermanently)
+		case strings.HasPrefix(r.URL.Path, srv.Base+"/"):
+			strip.ServeHTTP(&baseWriter{ResponseWriter: w, base: srv.Base}, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+// baseWriter adds the base path to the Location header and to cookie paths.
+type baseWriter struct {
+	http.ResponseWriter
+	base  string
+	wrote bool
+}
+
+func (w *baseWriter) WriteHeader(code int) {
+	if !w.wrote {
+		w.wrote = true
+		h := w.Header()
+		if loc := h.Get("Location"); strings.HasPrefix(loc, "/") && !strings.HasPrefix(loc, "//") {
+			h.Set("Location", w.base+loc)
+		}
+		for i, v := range h["Set-Cookie"] {
+			if c, err := http.ParseSetCookie(v); err == nil && c.Path == "/" {
+				c.Path = w.base
+				h["Set-Cookie"][i] = c.String()
+			}
+		}
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *baseWriter) Write(b []byte) (int, error) {
+	if !w.wrote {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+func (w *baseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // health is the load balancer's health check: 200 while the database answers.
 func (srv *Server) health(w http.ResponseWriter, r *http.Request) {

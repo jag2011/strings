@@ -24,11 +24,12 @@ type env struct {
 	t     *testing.T
 	store *store.Store
 	srv   *httptest.Server
+	base  string // prefixed to paths in get and post
 }
 
 func setup(t *testing.T) *env { return setupWith(t, nil) }
 
-func setupWith(t *testing.T, external *External) *env {
+func setupWith(t *testing.T, external *External, opts ...func(*Server)) *env {
 	t.Helper()
 	s, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -39,6 +40,9 @@ func setupWith(t *testing.T, external *External) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, o := range opts {
+		o(w)
+	}
 	ts := httptest.NewServer(w.Handler())
 	t.Cleanup(ts.Close)
 
@@ -46,7 +50,7 @@ func setupWith(t *testing.T, external *External) *env {
 	f, _ := arb.Parse([]byte(`{"hello": "Hello {name}!", "@hello": {"description": "Greeting"}, "bye": "Bye", "items": "{n, plural, one{# item} other{# items}}"}`))
 	s.ImportSource(ctx, f, nil)
 	s.AddLanguage(ctx, "de")
-	return &env{t: t, store: s, srv: ts}
+	return &env{t: t, store: s, srv: ts, base: w.Base}
 }
 
 // user creates a user and returns a logged-in client.
@@ -69,7 +73,7 @@ func (e *env) user(email, role string) *http.Client {
 
 func (e *env) post(c *http.Client, path string, v url.Values) *http.Response {
 	e.t.Helper()
-	req, _ := http.NewRequest("POST", e.srv.URL+path, strings.NewReader(v.Encode()))
+	req, _ := http.NewRequest("POST", e.srv.URL+e.base+path, strings.NewReader(v.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	res, err := c.Do(req)
@@ -82,7 +86,7 @@ func (e *env) post(c *http.Client, path string, v url.Values) *http.Response {
 
 func (e *env) get(c *http.Client, path string) (*http.Response, string) {
 	e.t.Helper()
-	res, err := c.Get(e.srv.URL + path)
+	res, err := c.Get(e.srv.URL + e.base + path)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -608,5 +612,78 @@ func TestClientIP(t *testing.T) {
 		if got := srv.clientIP(r); got != tc.want {
 			t.Errorf("trust=%v xff=%q: got %s, want %s", tc.trust, tc.xff, got, tc.want)
 		}
+	}
+}
+
+func TestBasePath(t *testing.T) {
+	e := setupWith(t, nil, func(s *Server) { s.Base = "/strings" })
+	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	raw := func(path string) *http.Response {
+		t.Helper()
+		res, err := noFollow.Get(e.srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res
+	}
+	for path, want := range map[string]int{
+		"/":                       http.StatusNotFound,
+		"/login":                  http.StatusNotFound,
+		"/stringsx/login":         http.StatusNotFound,
+		"/health":                 http.StatusOK,
+		"/strings/health":         http.StatusOK,
+		"/strings/login":          http.StatusOK,
+		"/strings/static/app.css": http.StatusOK,
+	} {
+		if res := raw(path); res.StatusCode != want {
+			t.Errorf("GET %s: %d, want %d", path, res.StatusCode, want)
+		}
+	}
+	if loc := raw("/strings").Header.Get("Location"); loc != "/strings/" {
+		t.Errorf("/strings redirects to %q", loc)
+	}
+	if loc := raw("/strings/t/de").Header.Get("Location"); loc != "/strings/login?next=%2Ft%2Fde" {
+		t.Errorf("login redirect to %q", loc)
+	}
+
+	c := e.user("admin@example.com", "admin")
+	u, _ := url.Parse(e.srv.URL + "/strings/")
+	if len(c.Jar.Cookies(u)) == 0 {
+		t.Error("no session cookie under /strings/")
+	}
+	if u, _ := url.Parse(e.srv.URL + "/"); len(c.Jar.Cookies(u)) != 0 {
+		t.Error("session cookie leaks to the root")
+	}
+	res, body := e.get(c, "/")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("home: %d", res.StatusCode)
+	}
+	for _, want := range []string{`href="/strings/t/de"`, `href="/strings/static/app.css`, `action="/strings/logout"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("home misses %s", want)
+		}
+	}
+	for _, bad := range []string{`href="/t/`, `action="/logout"`, `"/static/`} {
+		if strings.Contains(body, bad) {
+			t.Errorf("home has unprefixed %s", bad)
+		}
+	}
+
+	res = e.post(c, "/t/de/hello", url.Values{"text": {"Hallo {name}!"}})
+	if loc := res.Header.Get("Location"); !strings.HasPrefix(loc, "/strings/t/de") {
+		t.Errorf("save redirects to %q", loc)
+	}
+	req, _ := http.NewRequest("POST", e.srv.URL+"/strings/admin/users", strings.NewReader(url.Values{"email": {"new@example.com"}, "name": {"New"}, "role": {"translator"}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	res, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if !strings.Contains(string(b), e.srv.URL+"/strings/invite/") {
+		t.Error("invite link misses the base path")
 	}
 }
