@@ -9,6 +9,7 @@
     <a href="/t/{{$d.Lang}}{{query "filter" . "q" $d.Q}}" {{if eq . $d.Filter}}aria-current="page"{{end}}>{{.}} <span class="badge">{{index $d.Counts .}}</span></a>
   {{end}}
   </nav>
+  <a class="toolbar-link" href="/activity?lang={{$d.Lang}}">Activity</a>
   <input type="hidden" name="filter" value="{{$d.Filter}}">
   <input type="search" name="q" value="{{$d.Q}}" placeholder="Search keys and text" aria-label="Search">
 </form>

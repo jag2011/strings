@@ -221,6 +221,21 @@ func TestApprovalFlow(t *testing.T) {
 		t.Errorf("text %q", en.Text)
 	}
 
+	// Both show up in the activity, overall and for the language.
+	for _, path := range []string{"/activity", "/activity?lang=de"} {
+		res, body := e.get(tr, path)
+		if res.StatusCode != http.StatusOK || !strings.Contains(body, "✓ approved") || !strings.Contains(body, "approval removed") ||
+			!strings.Contains(body, "<ins>Ciao</ins>") {
+			t.Errorf("%s: %d", path, res.StatusCode)
+		}
+	}
+	if _, body := e.get(tr, "/t/de"); !strings.Contains(body, `href="/activity?lang=de"`) {
+		t.Error("no activity link in the language page")
+	}
+	if res, _ := e.get(tr, "/activity?lang=xx"); res.StatusCode != http.StatusNotFound {
+		t.Errorf("unknown language: %d", res.StatusCode)
+	}
+
 	// Admins can make proofreaders.
 	ad := e.user("ad@example.com", "admin")
 	if res := e.post(ad, "/admin/users", url.Values{"email": {"p2@example.com"}, "name": {"P"}, "role": {"proofreader"}}); res.StatusCode != http.StatusOK {

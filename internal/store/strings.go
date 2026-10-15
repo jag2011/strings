@@ -177,11 +177,15 @@ func (s *Store) ImportSource(ctx context.Context, f *arb.File, decide map[string
 				_, err = tx.ExecContext(ctx, "UPDATE translations SET source_hash = ? WHERE key = ? AND source_hash = ?", c.NewHash, c.Key, c.OldHash)
 			case RemoveTranslations:
 				res.Cleared++
-				_, err = tx.ExecContext(ctx, "DELETE FROM translations WHERE key = ?", c.Key)
+				if err = logSourceUnapproval(ctx, tx, c.Key); err == nil {
+					_, err = tx.ExecContext(ctx, "DELETE FROM translations WHERE key = ?", c.Key)
+				}
 			default:
 				// Approval was for the old source text.
 				res.Outdated++
-				_, err = tx.ExecContext(ctx, "UPDATE translations SET approved_by = NULL, approved_at = NULL WHERE key = ?", c.Key)
+				if err = logSourceUnapproval(ctx, tx, c.Key); err == nil {
+					_, err = tx.ExecContext(ctx, "UPDATE translations SET approved_by = NULL, approved_at = NULL WHERE key = ?", c.Key)
+				}
 			}
 			if err != nil {
 				return err
@@ -314,6 +318,24 @@ func write(ctx context.Context, tx *sql.Tx, lang, key, text, hash, origin string
 	return err
 }
 
+// logApproval records an approval change of the current translation.
+func logApproval(ctx context.Context, tx *sql.Tx, lang, key string, approved bool, userID int64) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO approval_log (lang, key, approved, history_id, user_id)
+		SELECT lang, key, ?, history_id, ? FROM translations WHERE lang = ? AND key = ?`,
+		approved, userID, lang, key)
+	return err
+}
+
+// logSourceUnapproval records that a source change removes the approvals of
+// a key's translations.
+func logSourceUnapproval(ctx context.Context, tx *sql.Tx, key string) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO approval_log (lang, key, approved, history_id)
+		SELECT lang, key, 0, history_id FROM translations WHERE key = ? AND approved_by IS NOT NULL`, key)
+	return err
+}
+
 // ErrConflict means the translation changed since the editor was opened.
 var ErrConflict = errors.New("changed by someone else in the meantime")
 
@@ -363,6 +385,9 @@ func (s *Store) Save(ctx context.Context, lang, key, text string, userID, base i
 		}
 		if approved && approval == Unapprove {
 			saved = true
+			if err := logApproval(ctx, tx, lang, key, false, userID); err != nil {
+				return err
+			}
 			if _, err := tx.ExecContext(ctx, "UPDATE translations SET approved_by = NULL, approved_at = NULL WHERE lang = ? AND key = ?", lang, key); err != nil {
 				return err
 			}
@@ -375,9 +400,11 @@ func (s *Store) Save(ctx context.Context, lang, key, text string, userID, base i
 		}
 		if approval == Approve && (!approved || !unchanged) {
 			saved = true
-			_, err := tx.ExecContext(ctx, "UPDATE translations SET approved_by = ?, approved_at = datetime('now') WHERE lang = ? AND key = ?",
-				userID, lang, key)
-			return err
+			if _, err := tx.ExecContext(ctx, "UPDATE translations SET approved_by = ?, approved_at = datetime('now') WHERE lang = ? AND key = ?",
+				userID, lang, key); err != nil {
+				return err
+			}
+			return logApproval(ctx, tx, lang, key, true, userID)
 		}
 		return nil
 	})
@@ -726,6 +753,63 @@ func (s *Store) UserEdits(ctx context.Context, userID int64, limit int) ([]Edit,
 			return nil, err
 		}
 		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// Activity is an edit or an approval change.
+type Activity struct {
+	Kind      string // "edit", "approved" or "unapproved"
+	Lang, Key string
+	Text      string // the new text, or the text whose approval changed
+	Prev      string // edits: the text before
+	HasPrev   bool
+	Origin    string // edits: "user" or "machine"
+	UserName  string // empty for approvals removed by a source change
+	CreatedAt string
+	Open      bool // the string can still be opened in the editor
+}
+
+// Activity lists the most recent edits and approval changes, newest first,
+// in one language or (lang "") in all current languages. Imports are left
+// out: one would bury everything else.
+func (s *Store) Activity(ctx context.Context, lang string, offset, limit int) ([]Activity, error) {
+	where, args := "IN (SELECT code FROM languages)", []any{}
+	if lang != "" {
+		where, args = "= ?", []any{lang, lang}
+	}
+	args = append(args, limit, offset)
+	// Approvals come after the edits they were saved with.
+	rows, err := s.r.QueryContext(ctx, `
+		WITH page AS (
+			SELECT 0 AS src, h.id, 'edit' AS kind, h.lang, h.key, h.id AS history_id, h.origin, h.user_id, h.created_at
+			FROM history h WHERE h.origin != 'import' AND h.lang `+where+`
+			UNION ALL
+			SELECT 1, a.id, iif(a.approved, 'approved', 'unapproved'), a.lang, a.key, a.history_id, '', a.user_id, a.created_at
+			FROM approval_log a WHERE a.lang `+where+`
+			ORDER BY created_at DESC, src DESC, id DESC LIMIT ? OFFSET ?
+		)
+		SELECT p.kind, p.lang, p.key, coalesce(h.text, ''), p.origin, coalesce(u.name, ''), p.created_at,
+			coalesce(s.removed = 0 AND s.draft = 0, 0),
+			iif(p.kind = 'edit', (SELECT o.text FROM history o WHERE o.lang = p.lang AND o.key = p.key AND o.id < p.id ORDER BY o.id DESC LIMIT 1), NULL)
+		FROM page p
+		LEFT JOIN history h ON h.id = p.history_id
+		LEFT JOIN users u ON u.id = p.user_id
+		LEFT JOIN source_strings s ON s.key = p.key
+		ORDER BY p.created_at DESC, p.src DESC, p.id DESC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Activity
+	for rows.Next() {
+		var a Activity
+		var prev sql.NullString
+		if err := rows.Scan(&a.Kind, &a.Lang, &a.Key, &a.Text, &a.Origin, &a.UserName, &a.CreatedAt, &a.Open, &prev); err != nil {
+			return nil, err
+		}
+		a.Prev, a.HasPrev = prev.String, prev.Valid
+		out = append(out, a)
 	}
 	return out, rows.Err()
 }

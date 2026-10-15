@@ -164,6 +164,7 @@ form.grid .span { grid-column: 1 / -1; }
 .crumbs { margin: 0 0 4px; color: var(--muted); font-size: 13px; }
 .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .toolbar input[type=search] { flex: 0 1 320px; min-width: 0; }
+.toolbar-link { margin: 0 auto 0 12px; }
 .tabs { display: flex; gap: 2px; background: var(--line); padding: 2px; border-radius: 8px; }
 .tabs a { padding: 4px 12px; border-radius: 6px; color: var(--muted); }
 .tabs a:hover { text-decoration: none; color: var(--text); }
@@ -253,3 +254,10 @@ summary { cursor: pointer; }
 .strings.changes td.change { width: 56%; }
 .strings.changes td.decide { width: 20%; }
 .decide label.check { display: flex; margin-top: 4px; }
+
+/* Activity */
+
+.strings.activity td:not(.key) { width: auto; }
+.strings.activity .key { width: 22%; }
+.strings.activity td.change { width: 50%; }
+.activity td.change .tag { margin-bottom: 4px; }

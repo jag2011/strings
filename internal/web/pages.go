@@ -228,6 +228,37 @@ func (srv *Server) revert(w http.ResponseWriter, r *http.Request, u *store.User)
 	return redirect(w, r, editorURL(lang, key, r.PostFormValue("filter"), r.PostFormValue("q")), "Restored an earlier version.")
 }
 
+type activityData struct {
+	Lang  string // empty for all languages
+	Items []store.Activity
+	Page  int
+	More  bool
+}
+
+// activity shows recent edits and approval changes. A language is a query
+// parameter rather than /t/{lang}/activity, which a key could be named.
+func (srv *Server) activity(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	q := r.URL.Query()
+	d := activityData{Lang: q.Get("lang")}
+	if d.Lang != "" {
+		if err := srv.requireLang(r.Context(), d.Lang); err != nil {
+			return err
+		}
+	}
+	d.Page, _ = strconv.Atoi(q.Get("page"))
+	d.Page = max(d.Page, 1)
+	items, err := srv.store.Activity(r.Context(), d.Lang, (d.Page-1)*pageSize, pageSize+1)
+	if err != nil {
+		return err
+	}
+	d.Items, d.More = items[:min(len(items), pageSize)], len(items) > pageSize
+	title := "Activity"
+	if d.Lang != "" {
+		title += " · " + langName(d.Lang)
+	}
+	return srv.render(w, r, http.StatusOK, "activity", u, title, d)
+}
+
 func (srv *Server) account(w http.ResponseWriter, r *http.Request, u *store.User) error {
 	edits, err := srv.store.UserEdits(r.Context(), u.ID, 200)
 	if err != nil {

@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/jag2011/strings/internal/arb"
@@ -390,5 +392,54 @@ func TestUsersAndTokens(t *testing.T) {
 	api, _ := s.CreateAPIToken(ctx, "ci")
 	if !s.CheckAPIToken(ctx, api) || s.CheckAPIToken(ctx, api+"x") || s.CheckAPIToken(ctx, "") {
 		t.Error("api token check")
+	}
+}
+
+func TestActivity(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	if _, err := s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana"}`), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ImportTranslations(ctx, "de", parse(t, `{"a": "Apfel"}`)); err != nil {
+		t.Fatal(err)
+	}
+	s.AddLanguage(ctx, "fr")
+	u, err := s.CreateUser(ctx, "p@example.com", "Pat", "proofreader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Save(ctx, "de", "a", "Äpfel", u.ID, -1, Approve); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Save(ctx, "fr", "b", "Banane", u.ID, -1, KeepApproval); err != nil {
+		t.Fatal(err)
+	}
+	// Changing the source removes the approval.
+	if _, err := s.ImportSource(ctx, parse(t, `{"a": "Apples", "b": "Banana"}`), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.Activity(ctx, "de", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type item struct{ kind, text, prev, user string }
+	var items []item
+	for _, a := range got {
+		items = append(items, item{a.Kind, a.Text, a.Prev, a.UserName})
+	}
+	// The import itself isn't listed, but is the edit's previous text.
+	want := []item{{"unapproved", "Äpfel", "", ""}, {"approved", "Äpfel", "", "Pat"}, {"edit", "Äpfel", "Apfel", "Pat"}}
+	if fmt.Sprint(items) != fmt.Sprint(want) {
+		t.Errorf("de activity:\n got %v\nwant %v", items, want)
+	}
+	all, _ := s.Activity(ctx, "", 0, 10)
+	if len(all) != 4 || !slices.ContainsFunc(all, func(a Activity) bool { return a.Lang == "fr" && a.Kind == "edit" && !a.HasPrev }) {
+		t.Errorf("all activity: %+v", all)
+	}
+	// Removed languages drop out of the overview.
+	s.RemoveLanguage(ctx, "fr")
+	if all, _ := s.Activity(ctx, "", 0, 10); len(all) != 3 {
+		t.Errorf("after removing fr: %d", len(all))
 	}
 }

@@ -13,6 +13,7 @@
   {{with .User}}
   <nav>
     <a href="/" {{if eq $.Nav "home"}}aria-current="page"{{end}}>Languages</a>
+    <a href="/activity" {{if eq $.Nav "activity"}}aria-current="page"{{end}}>Activity</a>
     <a href="/account" {{if eq $.Nav "account"}}aria-current="page"{{end}}>My edits</a>
     {{if .IsAdmin}}
     <a href="/admin" {{if eq $.Nav "admin"}}aria-current="page"{{end}}>Settings</a>
