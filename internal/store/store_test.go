@@ -419,7 +419,7 @@ func TestActivity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := s.Activity(ctx, "de", 0, 10)
+	got, err := s.Activity(ctx, "de", 0, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -433,13 +433,17 @@ func TestActivity(t *testing.T) {
 	if fmt.Sprint(items) != fmt.Sprint(want) {
 		t.Errorf("de activity:\n got %v\nwant %v", items, want)
 	}
-	all, _ := s.Activity(ctx, "", 0, 10)
+	all, _ := s.Activity(ctx, "", 0, 0, 10)
 	if len(all) != 4 || !slices.ContainsFunc(all, func(a Activity) bool { return a.Lang == "fr" && a.Kind == "edit" && !a.HasPrev }) {
 		t.Errorf("all activity: %+v", all)
 	}
+	// Approvals removed by a source change belong to nobody.
+	if mine, _ := s.Activity(ctx, "", u.ID, 0, 10); len(mine) != 3 || slices.ContainsFunc(mine, func(a Activity) bool { return a.Kind == "unapproved" }) {
+		t.Errorf("Pat's activity: %+v", mine)
+	}
 	// Removed languages drop out of the overview.
 	s.RemoveLanguage(ctx, "fr")
-	if all, _ := s.Activity(ctx, "", 0, 10); len(all) != 3 {
+	if all, _ := s.Activity(ctx, "", 0, 0, 10); len(all) != 3 {
 		t.Errorf("after removing fr: %d", len(all))
 	}
 }

@@ -134,7 +134,7 @@ func (s *Store) tx(ctx context.Context, fn func(*sql.Tx) error) error {
 
 // Settings with their defaults.
 var defaults = map[string]string{
-	"name":                 "strings",
+	"name":                 "Strings",
 	"accent":               "#2f6fde",
 	"source_lang":          "en",
 	"file_prefix":          "intl_",

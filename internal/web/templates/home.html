@@ -1,5 +1,4 @@
 {{define "content"}}
-<h1>{{.Settings.name}}</h1>
 {{if eq .Data.Total 0}}
   <p class="empty">No strings yet.
   {{if .User.IsAdmin}}<a href="/admin#import">Import ARB files</a> to get started.{{else}}An admin needs to import them first.{{end}}</p>

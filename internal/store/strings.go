@@ -731,32 +731,6 @@ func (s *Store) Contributors(ctx context.Context) (map[string][]Contributor, err
 	return out, rows.Err()
 }
 
-type Edit struct {
-	Lang, Key, Text, CreatedAt string
-	Current                    bool
-}
-
-// UserEdits lists a user's most recent edits.
-func (s *Store) UserEdits(ctx context.Context, userID int64, limit int) ([]Edit, error) {
-	rows, err := s.r.QueryContext(ctx, `
-		SELECT h.lang, h.key, h.text, h.created_at, t.history_id IS NOT NULL
-		FROM history h LEFT JOIN translations t ON t.history_id = h.id
-		WHERE h.user_id = ? ORDER BY h.id DESC LIMIT ?`, userID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Edit
-	for rows.Next() {
-		var e Edit
-		if err := rows.Scan(&e.Lang, &e.Key, &e.Text, &e.CreatedAt, &e.Current); err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
-}
-
 // Activity is an edit or an approval change.
 type Activity struct {
 	Kind      string // "edit", "approved" or "unapproved"
@@ -771,22 +745,26 @@ type Activity struct {
 }
 
 // Activity lists the most recent edits and approval changes, newest first,
-// in one language or (lang "") in all current languages. Imports are left
-// out: one would bury everything else.
-func (s *Store) Activity(ctx context.Context, lang string, offset, limit int) ([]Activity, error) {
-	where, args := "IN (SELECT code FROM languages)", []any{}
+// in one language or (lang "") in all current languages, by one user or
+// (userID 0) by anyone. Imports are left out: one would bury everything else.
+func (s *Store) Activity(ctx context.Context, lang string, userID int64, offset, limit int) ([]Activity, error) {
+	where, filter := "lang IN (SELECT code FROM languages)", []any{}
 	if lang != "" {
-		where, args = "= ?", []any{lang, lang}
+		where, filter = "lang = ?", []any{lang}
 	}
-	args = append(args, limit, offset)
+	if userID != 0 {
+		where += " AND user_id = ?"
+		filter = append(filter, userID)
+	}
+	args := append(append(append([]any{}, filter...), filter...), limit, offset)
 	// Approvals come after the edits they were saved with.
 	rows, err := s.r.QueryContext(ctx, `
 		WITH page AS (
 			SELECT 0 AS src, h.id, 'edit' AS kind, h.lang, h.key, h.id AS history_id, h.origin, h.user_id, h.created_at
-			FROM history h WHERE h.origin != 'import' AND h.lang `+where+`
+			FROM history h WHERE h.origin != 'import' AND `+where+`
 			UNION ALL
 			SELECT 1, a.id, iif(a.approved, 'approved', 'unapproved'), a.lang, a.key, a.history_id, '', a.user_id, a.created_at
-			FROM approval_log a WHERE a.lang `+where+`
+			FROM approval_log a WHERE `+where+`
 			ORDER BY created_at DESC, src DESC, id DESC LIMIT ? OFFSET ?
 		)
 		SELECT p.kind, p.lang, p.key, coalesce(h.text, ''), p.origin, coalesce(u.name, ''), p.created_at,

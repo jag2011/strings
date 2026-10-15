@@ -7,46 +7,5 @@
 <h1>Activity</h1>
 {{end}}
 <p class="muted small">Recent edits and approvals{{if gt $d.Page 1}} · page {{$d.Page}}{{end}}. Imports aren't listed.</p>
-
-{{if not $d.Items}}
-  <p class="empty">Nothing yet.</p>
-{{else}}
-<table class="strings changes activity">
-  <thead><tr><th>When</th><th>Who</th><th>Key</th><th>Change</th></tr></thead>
-  <tbody>
-  {{range $d.Items}}
-  <tr>
-    <td class="nowrap muted small">{{date .CreatedAt}}</td>
-    <td>{{with .UserName}}{{.}}{{else}}<span class="muted">—</span>{{end}}</td>
-    <td class="key">
-      {{if not $d.Lang}}<span class="muted">{{.Lang}}</span> {{end}}
-      {{- if .Open}}<a href="/t/{{.Lang}}/{{esc .Key}}">{{.Key}}</a>{{else}}{{.Key}}{{end}}
-    </td>
-    <td class="change" lang="{{bcp47 .Lang}}" dir="{{dir .Lang}}">
-      {{- if eq .Kind "approved"}}
-        <span class="tag approved">✓ approved</span>
-        <p class="text">{{.Text}}</p>
-      {{- else if eq .Kind "unapproved"}}
-        <span class="tag">approval removed{{if not .UserName}} · source text changed{{end}}</span>
-        <p class="text">{{.Text}}</p>
-      {{- else if .HasPrev}}{{with diff .Prev .Text}}
-        <p class="text old">{{.Pre}}{{with .Old}}<del>{{.}}</del>{{end}}{{.Suf}}</p>
-        <p class="text new">{{.Pre}}{{with .New}}<ins>{{.}}</ins>{{end}}{{.Suf}}</p>
-      {{- end}}{{else}}
-        <p class="text">{{.Text}}</p>
-      {{- end}}
-      {{- if eq .Origin "machine"}} <span class="tag">machine</span>{{end}}
-    </td>
-  </tr>
-  {{end}}
-  </tbody>
-</table>
-{{end}}
-
-{{if or (gt $d.Page 1) $d.More}}
-<nav class="pager">
-  {{if gt $d.Page 1}}<a href="/activity{{query "lang" $d.Lang "page" (print (add $d.Page -1))}}">← Newer</a>{{else}}<span></span>{{end}}
-  {{if $d.More}}<a href="/activity{{query "lang" $d.Lang "page" (print (add $d.Page 1))}}">Older →</a>{{end}}
-</nav>
-{{end}}
+{{template "activity-table" $d}}
 {{end}}

@@ -75,11 +75,12 @@ func New(s *store.Store, external *External) (*Server, error) {
 			return "ltr"
 		},
 	}
-	layout := template.Must(template.New("layout.html").Funcs(funcs).ParseFS(templateFS, "templates/layout.html"))
+	// Files starting with "_" hold templates shared by several pages.
+	layout := template.Must(template.New("layout.html").Funcs(funcs).ParseFS(templateFS, "templates/layout.html", "templates/_*.html"))
 	names, _ := fs.Glob(templateFS, "templates/*.html")
 	for _, n := range names {
 		name := path.Base(n)
-		if name == "layout.html" {
+		if name == "layout.html" || strings.HasPrefix(name, "_") {
 			continue
 		}
 		srv.pages[strings.TrimSuffix(name, ".html")] = template.Must(template.Must(layout.Clone()).ParseFS(templateFS, n))

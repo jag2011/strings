@@ -229,7 +229,9 @@ func (srv *Server) revert(w http.ResponseWriter, r *http.Request, u *store.User)
 }
 
 type activityData struct {
+	Path  string // the page, for the pager
 	Lang  string // empty for all languages
+	Mine  bool   // only the user's own activity
 	Items []store.Activity
 	Page  int
 	More  bool
@@ -238,20 +240,15 @@ type activityData struct {
 // activity shows recent edits and approval changes. A language is a query
 // parameter rather than /t/{lang}/activity, which a key could be named.
 func (srv *Server) activity(w http.ResponseWriter, r *http.Request, u *store.User) error {
-	q := r.URL.Query()
-	d := activityData{Lang: q.Get("lang")}
+	d := activityData{Path: "/activity", Lang: r.URL.Query().Get("lang")}
 	if d.Lang != "" {
 		if err := srv.requireLang(r.Context(), d.Lang); err != nil {
 			return err
 		}
 	}
-	d.Page, _ = strconv.Atoi(q.Get("page"))
-	d.Page = max(d.Page, 1)
-	items, err := srv.store.Activity(r.Context(), d.Lang, (d.Page-1)*pageSize, pageSize+1)
-	if err != nil {
+	if err := srv.loadActivity(r, &d, 0); err != nil {
 		return err
 	}
-	d.Items, d.More = items[:min(len(items), pageSize)], len(items) > pageSize
 	title := "Activity"
 	if d.Lang != "" {
 		title += " · " + langName(d.Lang)
@@ -259,10 +256,23 @@ func (srv *Server) activity(w http.ResponseWriter, r *http.Request, u *store.Use
 	return srv.render(w, r, http.StatusOK, "activity", u, title, d)
 }
 
+// account lists the user's own edits and approvals, like the activity page.
 func (srv *Server) account(w http.ResponseWriter, r *http.Request, u *store.User) error {
-	edits, err := srv.store.UserEdits(r.Context(), u.ID, 200)
+	d := activityData{Path: "/account", Mine: true}
+	if err := srv.loadActivity(r, &d, u.ID); err != nil {
+		return err
+	}
+	return srv.render(w, r, http.StatusOK, "account", u, "My edits", d)
+}
+
+// loadActivity fills in the requested page of activity.
+func (srv *Server) loadActivity(r *http.Request, d *activityData, userID int64) error {
+	d.Page, _ = strconv.Atoi(r.URL.Query().Get("page"))
+	d.Page = max(d.Page, 1)
+	items, err := srv.store.Activity(r.Context(), d.Lang, userID, (d.Page-1)*pageSize, pageSize+1)
 	if err != nil {
 		return err
 	}
-	return srv.render(w, r, http.StatusOK, "account", u, "My edits", edits)
+	d.Items, d.More = items[:min(len(items), pageSize)], len(items) > pageSize
+	return nil
 }
