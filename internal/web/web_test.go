@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -12,6 +13,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jag2011/strings/internal/arb"
@@ -24,14 +26,16 @@ type env struct {
 	srv   *httptest.Server
 }
 
-func setup(t *testing.T) *env {
+func setup(t *testing.T) *env { return setupWith(t, nil) }
+
+func setupWith(t *testing.T, external *External) *env {
 	t.Helper()
 	s, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
-	w, err := New(s)
+	w, err := New(s, external)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,4 +404,129 @@ func mustParse(t *testing.T, src string) *arb.File {
 		t.Fatal(err)
 	}
 	return f
+}
+
+// fakeAccounts is an external account server whose codes work once.
+type fakeAccounts struct {
+	mu    sync.Mutex
+	codes map[string]externalAccount
+}
+
+func (f *fakeAccounts) add(code, id, email, name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.codes[code] = externalAccount{ID: id, Email: email, Name: name}
+}
+
+func (f *fakeAccounts) has(code string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.codes[code]
+	return ok
+}
+
+func setupExternal(t *testing.T) (*env, *fakeAccounts) {
+	f := &fakeAccounts{codes: map[string]externalAccount{}}
+	as := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer s3cret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var req struct{ Code string }
+		json.NewDecoder(r.Body).Decode(&req)
+		f.mu.Lock()
+		a, ok := f.codes[req.Code]
+		delete(f.codes, req.Code)
+		f.mu.Unlock()
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		json.NewEncoder(w).Encode(a)
+	}))
+	t.Cleanup(as.Close)
+	return setupWith(t, &External{Name: "Home Quest", URL: as.URL + "/w/redeem", Secret: "s3cret"}), f
+}
+
+func (e *env) signInWithCode(code string) (*http.Client, *http.Response) {
+	e.t.Helper()
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return c, e.post(c, "/auth/app", url.Values{"code": {code}})
+}
+
+func TestExternalSignIn(t *testing.T) {
+	e, f := setupExternal(t)
+	ctx := context.Background()
+
+	_, body := e.get(http.DefaultClient, "/login")
+	if !strings.Contains(body, "Have a Home Quest account?") {
+		t.Error("login page doesn't mention Home Quest")
+	}
+
+	// Opening the link only shows a button, so mail scanners don't use the code.
+	f.add("c1", "hq-1", "Player@Example.com", "Nick")
+	res, body := e.get(http.DefaultClient, "/auth/app?code=c1")
+	if res.StatusCode != 200 || !strings.Contains(body, `value="c1"`) || !f.has("c1") {
+		t.Fatalf("GET: %d, code kept: %v\n%s", res.StatusCode, f.has("c1"), body)
+	}
+
+	c, res := e.signInWithCode("c1")
+	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/" {
+		t.Fatalf("sign in: %d %s", res.StatusCode, res.Header.Get("Location"))
+	}
+	if res, _ := e.get(c, "/t/de"); res.StatusCode != 200 {
+		t.Errorf("signed-in client: %d", res.StatusCode)
+	}
+	users, _ := e.store.Users(ctx)
+	if len(users) != 1 || users[0].Email != "player@example.com" || users[0].Name != "Nick" || users[0].Role != "translator" || !users[0].External {
+		t.Fatalf("user: %+v", users[0])
+	}
+	if _, res := e.signInWithCode("c1"); res.StatusCode != http.StatusNotFound {
+		t.Errorf("reused code: %d", res.StatusCode)
+	}
+
+	// The name and email follow the account.
+	f.add("c2", "hq-1", "new@example.com", "Nick2")
+	e.signInWithCode("c2")
+	users, _ = e.store.Users(ctx)
+	if len(users) != 1 || users[0].Name != "Nick2" || users[0].Email != "new@example.com" {
+		t.Errorf("after rename: %+v", users)
+	}
+	nick := users[0].ID
+
+	// Admins can't rename external users.
+	admin := e.user("admin@example.com", "admin")
+	e.post(admin, fmt.Sprintf("/admin/users/%d", nick), url.Values{"name": {"Other"}, "role": {"proofreader"}})
+	if u, _ := e.store.User(ctx, nick); u.Name != "Nick2" || u.Role != "proofreader" {
+		t.Errorf("after admin edit: %+v", u)
+	}
+
+	// An existing user with the same email is linked and keeps their role.
+	e.user("admin2@example.com", "admin")
+	f.add("c3", "hq-2", "ADMIN2@example.com", "Boss")
+	e.signInWithCode("c3")
+	users, _ = e.store.Users(ctx)
+	if len(users) != 3 {
+		t.Fatalf("got %d users", len(users))
+	}
+	for _, u := range users {
+		if u.Email == "admin2@example.com" && (u.Name != "Boss" || u.Role != "admin" || !u.External) {
+			t.Errorf("linked user: %+v", u)
+		}
+	}
+
+	// Disabled users stay out.
+	e.store.UpdateUser(ctx, nick, "x", "translator", true)
+	f.add("c4", "hq-1", "new@example.com", "Nick2")
+	if _, res := e.signInWithCode("c4"); res.StatusCode != http.StatusForbidden {
+		t.Errorf("disabled: %d", res.StatusCode)
+	}
+}
+
+func TestExternalSignInOff(t *testing.T) {
+	e := setup(t)
+	if res, _ := e.get(http.DefaultClient, "/auth/app?code=x"); res.StatusCode != 404 {
+		t.Errorf("GET without account server: %d", res.StatusCode)
+	}
 }

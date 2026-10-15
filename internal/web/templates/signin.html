@@ -1,0 +1,17 @@
+{{define "content"}}
+{{with .Data.Code}}
+<form class="narrow card" method="post" action="/auth/app">
+  <h1>Sign in</h1>
+  {{with $.Data.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
+  <input type="hidden" name="code" value="{{.}}">
+  <p>Continue with your {{$.Data.App}} account.</p>
+  <button class="primary" autofocus>Continue</button>
+</form>
+{{else}}
+<div class="narrow card">
+  <h1>Link expired</h1>
+  {{with $.Data.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
+  <p>This sign-in link was already used or is too old. Request a new one in {{$.Data.App}}.</p>
+</div>
+{{end}}
+{{end}}

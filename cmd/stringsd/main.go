@@ -30,6 +30,10 @@ Usage:
   stringsd token  [-db strings.db] <name>
 
 The database path can also be set with STRINGS_DB.
+
+Sign-in links from an external account server (see README) are enabled with
+STRINGS_AUTH_URL (the code exchange endpoint), STRINGS_AUTH_SECRET and
+STRINGS_AUTH_NAME (shown to users, e.g. "Home Quest").
 `
 
 func main() {
@@ -48,7 +52,11 @@ func main() {
 	case "serve":
 		addr := fs.String("addr", envOr("STRINGS_ADDR", ":8080"), "listen address")
 		fs.Parse(args)
-		err = serve(*dbPath, *addr)
+		var ext *web.External
+		ext, err = externalFromEnv()
+		if err == nil {
+			err = serve(*dbPath, *addr, ext)
+		}
 	case "user":
 		admin := fs.Bool("admin", false, "make the user an admin")
 		proofreader := fs.Bool("proofreader", false, "make the user a proofreader, who can approve translations")
@@ -112,9 +120,20 @@ func withStore(path string, fn func(*store.Store) error) error {
 	return fn(s)
 }
 
-func serve(dbPath, addr string) error {
+func externalFromEnv() (*web.External, error) {
+	x := &web.External{URL: os.Getenv("STRINGS_AUTH_URL"), Secret: os.Getenv("STRINGS_AUTH_SECRET"), Name: os.Getenv("STRINGS_AUTH_NAME")}
+	switch {
+	case x.URL == "" && x.Secret == "":
+		return nil, nil
+	case x.URL == "" || x.Secret == "" || x.Name == "":
+		return nil, fmt.Errorf("STRINGS_AUTH_URL, STRINGS_AUTH_SECRET and STRINGS_AUTH_NAME must be set together")
+	}
+	return x, nil
+}
+
+func serve(dbPath, addr string, ext *web.External) error {
 	return withStore(dbPath, func(s *store.Store) error {
-		srv, err := web.New(s)
+		srv, err := web.New(s, ext)
 		if err != nil {
 			return err
 		}
@@ -134,6 +153,9 @@ func serve(dbPath, addr string) error {
 			hs.Shutdown(shut)
 		}()
 		log.Printf("stringsd: serving %s on %s", dbPath, addr)
+		if ext != nil {
+			log.Printf("stringsd: sign-in links from %s (%s)", ext.Name, ext.URL)
+		}
 		if err := hs.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}

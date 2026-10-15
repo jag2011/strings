@@ -49,6 +49,15 @@ func safeNext(next string) string {
 
 type loginData struct {
 	Email, Next, Error string
+	App                string // name of the external account server
+}
+
+func (srv *Server) newLoginData(email, next string) loginData {
+	d := loginData{Email: email, Next: next}
+	if srv.external != nil {
+		d.App = srv.external.Name
+	}
+	return d
 }
 
 func (srv *Server) loginPage(w http.ResponseWriter, r *http.Request) {
@@ -56,7 +65,7 @@ func (srv *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, safeNext(r.URL.Query().Get("next")), http.StatusSeeOther)
 		return
 	}
-	srv.renderPublic(w, r, http.StatusOK, "login", "Log in", loginData{Next: r.URL.Query().Get("next")})
+	srv.renderPublic(w, r, http.StatusOK, "login", "Log in", srv.newLoginData("", r.URL.Query().Get("next")))
 }
 
 func clientIP(r *http.Request) string {
@@ -69,7 +78,7 @@ func clientIP(r *http.Request) string {
 
 func (srv *Server) login(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(strings.TrimSpace(r.PostFormValue("email")))
-	data := loginData{Email: email, Next: r.PostFormValue("next")}
+	data := srv.newLoginData(email, r.PostFormValue("next"))
 	key := clientIP(r) + "|" + email
 	if srv.limiter.blocked(key) {
 		data.Error = "Too many attempts. Try again in 15 minutes."

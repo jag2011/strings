@@ -6,6 +6,7 @@
   <label>Email <input type="email" name="email" value="{{.Data.Email}}" autocomplete="username" required {{if not .Data.Email}}autofocus{{end}}></label>
   <label>Password <input type="password" name="password" autocomplete="current-password" required {{if .Data.Email}}autofocus{{end}}></label>
   <button class="primary">Log in</button>
+  {{with .Data.App}}<p class="muted small">Have a {{.}} account? Request a sign-in link in {{.}}.</p>{{end}}
   <p class="muted small">No account yet? Ask an admin for an invite link.</p>
 </form>
 {{end}}

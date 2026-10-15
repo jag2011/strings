@@ -27,14 +27,16 @@ var templateFS embed.FS
 var staticFS embed.FS
 
 type Server struct {
-	store   *store.Store
-	pages   map[string]*template.Template
-	limiter *limiter
-	static  string // cache-busting suffix for static URLs
+	store    *store.Store
+	external *External // nil: no sign-in through an account server
+	pages    map[string]*template.Template
+	limiter  *limiter
+	static   string // cache-busting suffix for static URLs
 }
 
-func New(s *store.Store) (*Server, error) {
-	srv := &Server{store: s, pages: map[string]*template.Template{}, limiter: newLimiter(10, 15*time.Minute),
+// New returns the server. external may be nil.
+func New(s *store.Store, external *External) (*Server, error) {
+	srv := &Server{store: s, external: external, pages: map[string]*template.Template{}, limiter: newLimiter(10, 15*time.Minute),
 		static: fmt.Sprint(time.Now().Unix())}
 	funcs := template.FuncMap{
 		"plural": func(n int, one, many string) string {
@@ -101,6 +103,8 @@ func (srv *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /logout", srv.logout)
 	mux.HandleFunc("GET /invite/{token}", srv.invitePage)
 	mux.HandleFunc("POST /invite/{token}", srv.invite)
+	mux.HandleFunc("GET /auth/app", srv.externalPage)
+	mux.HandleFunc("POST /auth/app", srv.externalSignIn)
 
 	page("GET /{$}", srv.home)
 	page("GET /account", srv.account)

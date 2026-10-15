@@ -18,8 +18,9 @@ app's repository and is never written by strings.
   Several apps means several instances.
 - **Plain server-rendered pages.** Every feature works without JavaScript.
 - **Few dependencies.** The Go standard library plus a pure-Go SQLite driver.
-- **Known contributors.** Admins create every account, so there is no sign-up,
-  spam filtering or approval queue. History and restore cover mistakes.
+- **Known contributors.** Admins create every account, or an app's backend
+  vouches for its users (sign-in links), so there is no sign-up, spam
+  filtering or approval queue. History and restore cover mistakes.
 
 ## Stack
 
@@ -148,6 +149,14 @@ Schema: [`internal/store/schema/001_init.sql`](../internal/store/schema/001_init
 - Roles: *translators* translate, *proofreaders* also approve translations
   and remove approvals, *admins* can do everything.
 - Failed logins are limited to 10 per IP and email in 15 minutes.
+- **Sign-in links from an app's backend** (optional, `STRINGS_AUTH_*`): the
+  backend emails a link with a one-time code to `/auth/app`. `GET` shows a
+  button, because mail scanners open links; `POST` exchanges the code at the
+  backend with a shared secret for `{id, name, email}`. The user is found by
+  `external_id`, else linked by email (the link went to that address), else
+  created as a translator. Name and email follow the app account on every
+  sign-in, so admins can't rename external users. Unknown codes count
+  towards a limit of 10 per IP in 15 minutes.
 - API tokens (`st_…`) are stored as SHA-256 and give full API access.
 
 ## Roadmap
@@ -155,7 +164,7 @@ Schema: [`internal/store/schema/001_init.sql`](../internal/store/schema/001_init
 | Feature | Note |
 |---|---|
 | Machine translation of missing and outdated strings | Optional; `origin = 'machine'` exists |
-| External auth (OIDC, app handoff) | Map identities to `users` rows |
+| External auth (OIDC) | Sign-in links from an app exist; OIDC would add sign-in without the app |
 | Per-language permissions | Only if needed |
 | Review mode | Edits wait for approval |
 | Glossary | Shown in the editor |

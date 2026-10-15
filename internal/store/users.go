@@ -18,6 +18,8 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
+var ErrDisabled = errors.New("account disabled")
+
 type User struct {
 	ID          int64
 	Email       string
@@ -25,6 +27,7 @@ type User struct {
 	Role        string
 	Disabled    bool
 	HasPassword bool
+	External    bool // signs in through the external account server
 	CreatedAt   string
 }
 
@@ -37,11 +40,11 @@ func (u *User) IsAdmin() bool { return u != nil && u.Role == "admin" }
 // CanApprove says whether u may approve translations and remove approvals.
 func (u *User) CanApprove() bool { return u != nil && (u.Role == "admin" || u.Role == "proofreader") }
 
-const userCols = "id, email, name, role, disabled, password_hash IS NOT NULL, created_at"
+const userCols = "id, email, name, role, disabled, password_hash IS NOT NULL, external_id IS NOT NULL, created_at"
 
 func scanUser(row interface{ Scan(...any) error }) (*User, error) {
 	u := &User{}
-	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.Disabled, &u.HasPassword, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.Disabled, &u.HasPassword, &u.External, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -98,7 +101,8 @@ func (s *Store) UpdateUser(ctx context.Context, id int64, name, role string, dis
 		return fmt.Errorf("a name is required")
 	}
 	return s.tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, "UPDATE users SET name = ?, role = ?, disabled = ? WHERE id = ?",
+		// Names of external users follow their account.
+		if _, err := tx.ExecContext(ctx, "UPDATE users SET name = iif(external_id IS NULL, ?, name), role = ?, disabled = ? WHERE id = ?",
 			strings.TrimSpace(name), role, disabled, id); err != nil {
 			return err
 		}
@@ -130,6 +134,50 @@ func (s *Store) Login(ctx context.Context, email, password string) (*User, error
 		return nil, err
 	}
 	return s.User(ctx, id)
+}
+
+// ExternalSignIn returns the user for an account of the external account
+// server and updates their name and email. A user with the same email is
+// linked, since the sign-in link went to that address. Otherwise a translator
+// is created.
+func (s *Store) ExternalSignIn(ctx context.Context, externalID, email, name string) (*User, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	name = strings.TrimSpace(name)
+	if externalID == "" || name == "" || !strings.Contains(email, "@") {
+		return nil, fmt.Errorf("incomplete account: id %q, email %q, name %q", externalID, email, name)
+	}
+	var id int64
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		err := tx.QueryRowContext(ctx, "SELECT id FROM users WHERE external_id = ?", externalID).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = tx.QueryRowContext(ctx, "SELECT id FROM users WHERE email = ? AND external_id IS NULL", email).Scan(&id)
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			err = tx.QueryRowContext(ctx, "INSERT INTO users (email, name, role, external_id) VALUES (?, ?, 'translator', ?) RETURNING id",
+				email, name, externalID).Scan(&id)
+			if err != nil && strings.Contains(err.Error(), "UNIQUE") {
+				return fmt.Errorf("%s is used by another linked account", email)
+			}
+			return err
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE users SET external_id = ?, name = ? WHERE id = ?", externalID, name, id); err != nil {
+			return err
+		}
+		// Keeps the old email if another user has the new one.
+		_, err = tx.ExecContext(ctx, "UPDATE OR IGNORE users SET email = ? WHERE id = ?", email, id)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	u, err := s.User(ctx, id)
+	if err == nil && u.Disabled {
+		return nil, ErrDisabled
+	}
+	return u, err
 }
 
 const sessionTTL = 30 * 24 * time.Hour

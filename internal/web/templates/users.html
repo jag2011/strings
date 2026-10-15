@@ -30,7 +30,7 @@
   <tbody>
   {{range $d.Users}}
   <tr {{if .Disabled}}class="disabled"{{end}}>
-    <td><input form="u{{.ID}}" name="name" value="{{.Name}}" required aria-label="Name"></td>
+    <td><input form="u{{.ID}}" name="name" value="{{.Name}}" required aria-label="Name" {{if .External}}readonly title="Follows their {{$d.App}} account"{{end}}></td>
     <td>{{.Email}}</td>
     <td>
       <select form="u{{.ID}}" name="role" aria-label="Role">
@@ -41,11 +41,11 @@
     </td>
     <td>
       <label class="check"><input form="u{{.ID}}" type="checkbox" name="disabled" value="1" {{if .Disabled}}checked{{end}}> disabled</label>
-      {{if not .HasPassword}}<span class="tag">invited</span>{{end}}
+      {{if .External}}<span class="tag">{{$d.App}}</span>{{else if not .HasPassword}}<span class="tag">invited</span>{{end}}
     </td>
     <td class="nowrap">
       <form id="u{{.ID}}" method="post" action="/admin/users/{{.ID}}" class="inline-form"><button class="small">Save</button></form>
-      <form method="post" action="/admin/users/{{.ID}}/link" class="inline-form"><button class="small">{{if .HasPassword}}Reset link{{else}}New invite link{{end}}</button></form>
+      {{if or .HasPassword (not .External)}}<form method="post" action="/admin/users/{{.ID}}/link" class="inline-form"><button class="small">{{if .HasPassword}}Reset link{{else}}New invite link{{end}}</button></form>{{end}}
     </td>
   </tr>
   {{end}}

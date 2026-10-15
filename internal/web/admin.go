@@ -253,12 +253,16 @@ type usersData struct {
 	Link  string // invite or reset link to pass on
 	For   *store.User
 	Error string
+	App   string // name of the external account server
 }
 
 func (srv *Server) renderUsers(w http.ResponseWriter, r *http.Request, u *store.User, status int, d usersData) error {
 	var err error
 	if d.Users, err = srv.store.Users(r.Context()); err != nil {
 		return err
+	}
+	if srv.external != nil {
+		d.App = srv.external.Name
 	}
 	return srv.render(w, r, status, "users", u, "Users", d)
 }

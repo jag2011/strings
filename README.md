@@ -23,7 +23,8 @@ translated ARBs. One binary, one SQLite file, no JavaScript framework.
   checked. Approved strings get a checkmark and are locked until a
   proofreader or admin removes the approval.
 - **Simple accounts.** Admins invite translators and proofreaders with a
-  link. No email server.
+  link. No email server. Optionally, users of your app sign in with their
+  app account through a link the app's backend emails them.
 - **HTTP API** for syncing from CI with `curl`.
 - **Small.** Go standard library plus a pure-Go SQLite driver. Works without
   JavaScript; a few lines of it add keyboard shortcuts.
@@ -118,6 +119,40 @@ The source file is never exported. It belongs to your repository.
   the export writes it, and later imports keep it.
 
 More in [docs/design.md](docs/design.md).
+
+## Sign-in links from your app
+
+Let the users of your app sign in with their app account. In the app, they
+tap a button, your backend emails them a link, and the link signs them in to
+strings on any device. New users become translators. Their name and email
+follow their app account; an existing strings user with the same email is
+linked.
+
+1. Your backend makes a one-time code (short-lived, random) for the user and
+   emails a link to `https://strings.example.com/auth/app?code=…`.
+2. The link opens a page with a *Continue* button (mail scanners open links,
+   so the code isn't used on `GET`). The button makes strings exchange the
+   code:
+
+   ```http
+   POST $STRINGS_AUTH_URL
+   Authorization: Bearer $STRINGS_AUTH_SECRET
+   Content-Type: application/json
+
+   {"code": "…"}
+   ```
+
+   Your backend deletes the code and answers `200` with
+   `{"id": "…", "name": "…", "email": "…"}`, or `404` if the code is unknown,
+   used or expired.
+
+Enable it with:
+
+```sh
+STRINGS_AUTH_URL=https://api.example.com/w/redeem
+STRINGS_AUTH_SECRET=…          # shared with your backend
+STRINGS_AUTH_NAME="My App"     # shown on the login page
+```
 
 ## Running in production
 
