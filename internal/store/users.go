@@ -87,8 +87,8 @@ func (s *Store) CreateAIUser(ctx context.Context, name, model string) (*User, er
 	if name == "" {
 		return nil, fmt.Errorf("a name is required")
 	}
-	if model == "" {
-		return nil, fmt.Errorf("a model is required")
+	if err := checkModel(model); err != nil {
+		return nil, err
 	}
 	token, _ := NewToken()
 	email := "ai-" + strings.ToLower(token[:12]) + "@strings.invalid"
@@ -96,10 +96,22 @@ func (s *Store) CreateAIUser(ctx context.Context, name, model string) (*User, er
 		"INSERT INTO users (email, name, role, unlisted, ai_model) VALUES (?, ?, 'translator', 1, ?) RETURNING "+userCols, email, name, model))
 }
 
+// checkModel wants an OpenRouter model name: provider/model.
+func checkModel(model string) error {
+	if model == "" {
+		return fmt.Errorf("a model is required")
+	}
+	if p, m, ok := strings.Cut(model, "/"); !ok || p == "" || m == "" || strings.ContainsAny(model, " \t") {
+		return fmt.Errorf("the model %q isn't an OpenRouter model name like anthropic/claude-opus-5.5", model)
+	}
+	return nil
+}
+
 // SetAIModel changes the model of an AI user.
 func (s *Store) SetAIModel(ctx context.Context, id int64, model string) error {
-	if model = strings.TrimSpace(model); model == "" {
-		return fmt.Errorf("a model is required")
+	model = strings.TrimSpace(model)
+	if err := checkModel(model); err != nil {
+		return err
 	}
 	_, err := s.w.ExecContext(ctx, "UPDATE users SET ai_model = ? WHERE id = ? AND ai_model IS NOT NULL", model, id)
 	return err
@@ -186,6 +198,8 @@ func (s *Store) MergeUser(ctx context.Context, from, into int64) error {
 			"UPDATE translations SET user_id = ?1 WHERE user_id = ?2",
 			"UPDATE translations SET approved_by = ?1 WHERE approved_by = ?2",
 			"UPDATE approval_log SET user_id = ?1 WHERE user_id = ?2",
+			"UPDATE ai_runs SET user_id = ?1 WHERE user_id = ?2",
+			"UPDATE ai_runs SET started_by = ?1 WHERE started_by = ?2",
 			// Of two suggestions for the same string, the newer one stays.
 			`DELETE FROM suggestions WHERE user_id = ?1 AND EXISTS (SELECT 1 FROM suggestions f
 				WHERE f.user_id = ?2 AND f.lang = suggestions.lang AND f.key = suggestions.key AND f.created_at >= suggestions.created_at)`,

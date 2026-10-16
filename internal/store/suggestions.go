@@ -17,6 +17,10 @@ type Suggestion struct {
 	CreatedAt string
 }
 
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 // visibleSuggestion is the condition for suggestions g worth showing for
 // source string s and translation t: made for the current source text and
 // not already the current, up-to-date translation.
@@ -24,7 +28,11 @@ const visibleSuggestion = "g.source_hash = s.hash AND NOT coalesce(t.text = g.te
 
 // Suggest stores userID's suggestion for a string, replacing their previous one.
 func (s *Store) Suggest(ctx context.Context, lang, key, text string, userID int64) error {
-	res, err := s.w.ExecContext(ctx, `
+	return suggest(ctx, s.w, lang, key, text, userID)
+}
+
+func suggest(ctx context.Context, x execer, lang, key, text string, userID int64) error {
+	res, err := x.ExecContext(ctx, `
 		INSERT INTO suggestions (lang, key, text, source_hash, user_id)
 		SELECT ?, key, ?, hash, ? FROM source_strings WHERE key = ? AND removed = 0 AND draft = 0
 		ON CONFLICT (lang, key, user_id) DO UPDATE SET

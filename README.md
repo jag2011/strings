@@ -25,9 +25,13 @@ translated ARBs. One binary, one SQLite file, no JavaScript framework.
 - **Simple accounts.** Admins invite translators and proofreaders with a
   link. No email server. Optionally, users of your app sign in with their
   app account through a link the app's backend emails them.
+- **AI translation.** AI users with models from any provider (through
+  OpenRouter) translate a language in the background. Their work waits for
+  approval, as translations or as suggestions to pick from.
 - **HTTP API** for syncing from CI with `curl`.
-- **Small.** Go standard library plus a pure-Go SQLite driver. Works without
-  JavaScript; a few lines of it add keyboard shortcuts.
+- **Small.** Go standard library plus a pure-Go SQLite driver, and
+  OpenRouter's Go agent SDK for AI translation. Works without JavaScript; a
+  few lines of it add keyboard shortcuts.
 
 ## Quick start
 
@@ -154,6 +158,34 @@ STRINGS_AUTH_SECRET=…          # shared with your backend
 STRINGS_AUTH_NAME="My App"     # shown on the login page
 ```
 
+## AI translation
+
+AI users translate through [OpenRouter](https://openrouter.ai), which reaches
+models of many providers with one key. Enable it with:
+
+```sh
+OPENROUTER_API_KEY=sk-or-…
+```
+
+1. Under *Users*, add an AI user with an OpenRouter model name, like
+   `anthropic/claude-opus-5.5` or `openai/gpt-5.5`
+   ([models](https://openrouter.ai/models)).
+2. Under *AI*, pick a language, the AI user, *Missing* or *All* strings,
+   optional style notes and a cost limit, and press *Translate*. The run
+   starts in the background; its page shows progress, cost and a log.
+
+What a run may do is enforced when it saves, whatever the model asks:
+missing strings get the AI user's translation (or a suggestion, with *Save as
+suggestions*); existing translations only ever get suggestions, and only with
+*All*; approved strings are never touched. Texts with validation errors are
+not saved, and the model is told to fix them. Everything is credited to the
+AI user and waits for a proofreader.
+
+A run stops when nothing is left, at its cost limit, or when cancelled.
+Runs that a server restart interrupted can be started again and continue
+where they stopped. Several AI users can translate the same language; their
+suggestions appear side by side in the editor.
+
 ## Running in production
 
 - Put it behind a reverse proxy that terminates TLS and sets
@@ -192,8 +224,12 @@ ARB_TESTDATA=path/to/lib/l10n go test ./internal/arb
 |---|---|
 | `cmd/stringsd` | CLI |
 | `internal/arb` | ARB parsing and writing, ICU validation |
+| `internal/ai` | AI translation runs: worker, agent tools, OpenRouter |
 | `internal/store` | SQLite storage; migrations in `schema/` |
 | `internal/web` | Handlers, `templates/`, `static/` |
+
+With `OPENROUTER_API_KEY` set, `go test ./internal/ai` also calls the real API
+once (cheap model, a few cents at most; pick one with `OPENROUTER_TEST_MODEL`).
 
 Issues and pull requests are welcome. Please keep the spirit: few dependencies,
 plain HTML, no build step.

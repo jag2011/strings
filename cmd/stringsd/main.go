@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jag2011/strings/internal/ai"
 	"github.com/jag2011/strings/internal/arb"
 	"github.com/jag2011/strings/internal/store"
 	"github.com/jag2011/strings/internal/web"
@@ -39,6 +40,8 @@ apply per client.
 Sign-in links from an external account server (see README) are enabled with
 STRINGS_AUTH_URL (the code exchange endpoint), STRINGS_AUTH_SECRET and
 STRINGS_AUTH_NAME (shown to users, e.g. "Home Quest").
+
+AI translation (Admin → AI) is enabled with OPENROUTER_API_KEY.
 `
 
 func main() {
@@ -174,6 +177,22 @@ func serve(dbPath, addr, base string, ext *web.External, trustProxy bool) error 
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
+		if key := os.Getenv("OPENROUTER_API_KEY"); key != "" {
+			srv.AI = ai.NewRunner(s, ai.NewOpenRouter(key))
+			srv.AI.LangName = web.LangName
+			if err := srv.AI.Start(ctx); err != nil {
+				return err
+			}
+			// A running job is stopped with the server and marked
+			// interrupted before the database closes.
+			defer func() {
+				stop()
+				srv.AI.Wait()
+			}()
+			log.Printf("stringsd: AI translation through OpenRouter")
+		} else if _, err := s.InterruptAIRuns(ctx); err != nil {
+			return err
+		}
 		go func() {
 			<-ctx.Done()
 			shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)

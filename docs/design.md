@@ -17,7 +17,8 @@ app's repository and is never written by strings.
 - **One instance, one SQLite file, one project.** There is no project layer.
   Several apps means several instances.
 - **Plain server-rendered pages.** Every feature works without JavaScript.
-- **Few dependencies.** The Go standard library plus a pure-Go SQLite driver.
+- **Few dependencies.** The Go standard library plus a pure-Go SQLite driver,
+  and OpenRouter's agent SDK for AI translation.
 - **Known contributors.** Admins create every account, or an app's backend
   vouches for its users (sign-in links), so there is no sign-up, spam
   filtering or approval queue. History and restore cover mistakes.
@@ -35,6 +36,7 @@ app's repository and is never written by strings.
 | Queries | plain `database/sql` | A few dozen queries; an ORM or codegen costs more than it saves |
 | Migrations | embedded `schema/NNN_*.sql` + `PRAGMA user_version` | No migration tool |
 | Passwords | `crypto/pbkdf2`, SHA-256, 600k iterations | No extra dependency |
+| AI agent | [`OpenRouterTeam/go-agent`](https://github.com/OpenRouterTeam/go-agent) | Tool loop and usage over OpenRouter's Responses API; one key for many model providers |
 
 SQLite runs with `journal_mode=WAL`, `busy_timeout=5000`, `foreign_keys=ON` and
 `synchronous=NORMAL`. Writes go through a single connection, reads through a
@@ -168,11 +170,61 @@ Schema: [`internal/store/schema/001_init.sql`](../internal/store/schema/001_init
   sign in (no password, placeholder email), are unlisted, and are added under
   *Users*.
 
+## AI translation (`internal/ai`)
+
+An admin queues a run on `/admin/ai`: language, AI user, *Missing* or *All*,
+suggestions only or not, style notes, cost limit. One worker goroutine in
+`stringsd serve` runs one run at a time, oldest first.
+
+```
+Runner ──session──▶ go-agent loop ──▶ OpenRouter ──▶ the AI user's model
+   │                    │ tool calls
+   │                    ▼
+   └─ ai_runs ◀── get_job · next_strings · lookup · save ──▶ store
+```
+
+- **Tools** are plain Go functions. `get_job` returns the language, mode,
+  style notes and strings left. `next_strings(limit)` returns the next
+  pending strings as ARB (source, `@key` metadata) plus current translations;
+  each string is handed out once per run, so one the model can't get right
+  doesn't loop. `lookup(query)` searches existing translations, approved ones
+  first, to keep terms consistent. `save([{key, text}])` runs `arb.Check`
+  and saves by the rules below, returning errors and warnings per key.
+- **The rules live in `store.AISave`, not in the prompt:** no translation →
+  the AI user's translation (origin `machine`), or a suggestion if the run
+  says so; a translation → only a suggestion, and only with *All*; approved →
+  never touched. A suggestion equal to the current translation is stored but
+  not shown, so the string counts as done for that AI user.
+- **Pending is derived from the database**: strings with no translation, and
+  with *All* unapproved ones, minus those the AI user already translated or
+  suggested something for, for the current source text. A run started again
+  after an interruption continues where it stopped, and several runs of
+  different AI users can work on the same language.
+- **Sessions.** The model sees the whole conversation on every call, so a
+  run is split into sessions of 16 model calls; the next one starts fresh
+  with "continue". The system prompt (ARB/ICU rules, language, style notes,
+  working method) stays the same, and top-level `cache_control` turns on
+  Anthropic's caching, which other providers do on their own.
+- **Stopping.** Before every model call the runner checks for cancel, the
+  run's cost limit (cost as OpenRouter reports it), a step limit and the
+  session size. So a cancel takes effect after the current step, and a run
+  overshoots its limit by one call at most. A model that stops by itself
+  without saving anything has given up, and the run ends.
+- **States:** queued → running → done, failed, cancelled or interrupted.
+  On start, runs still marked running are interrupted (the server stopped
+  during them); interrupted, failed and cancelled runs can be started again.
+  Counters, tokens and cost keep adding up across restarts. `ai_run_events`
+  holds one line per tool call for the log on the run's page, which reloads
+  every few seconds while the run is active.
+- **Tests** script the agent (`ai.Agent` is an interface) and check the save
+  rules, the tools, sessions, limits, cancel and restart. The OpenRouter
+  adapter is tested against a fake Responses endpoint, and against the real
+  one when `OPENROUTER_API_KEY` is set.
+
 ## Roadmap
 
 | Feature | Note |
 |---|---|
-| Machine translation of missing and outdated strings | Optional; `origin = 'machine'` exists |
 | External auth (OIDC) | Sign-in links from an app exist; OIDC would add sign-in without the app |
 | Per-language permissions | Only if needed |
 | Review mode | Edits wait for approval |

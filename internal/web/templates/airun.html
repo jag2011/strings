@@ -1,0 +1,35 @@
+{{define "content"}}
+{{$r := .Data.Run}}
+<p class="crumbs"><a href="{{base}}/admin/ai">AI translation</a></p>
+<h1>Run #{{$r.ID}} {{template "runStatus" $r}}</h1>
+{{with $r.Error}}<p class="{{if eq $r.Status "failed"}}error{{else}}note outdated{{end}}" role="alert">{{.}}</p>{{end}}
+
+<section class="card run" {{if $r.Active}}data-reload="3"{{end}}>
+  <dl class="facts">
+    <dt>Language</dt><dd><a href="{{base}}/t/{{$r.Lang}}">{{langName $r.Lang}} ({{$r.Lang}})</a>{{if or $r.Translated $r.Suggested}} · <a href="{{base}}/t/{{$r.Lang}}{{query "filter" "unapproved"}}">review</a>{{end}}</dd>
+    <dt>AI user</dt><dd><a href="{{base}}/u/{{$r.UserID}}">{{$r.UserName}}</a> · <span class="mono">{{$r.Model}}</span></dd>
+    <dt>Strings</dt><dd>{{if eq $r.Input "all"}}All but approved{{else}}Missing{{end}}, {{if $r.Suggest}}as suggestions{{else}}missing ones as translations{{end}}</dd>
+    {{with $r.Notes}}<dt>Style notes</dt><dd class="text">{{.}}</dd>{{end}}
+    <dt>Saved</dt><dd>{{$r.Translated}} translated · {{$r.Suggested}} suggested{{if $r.Failed}} · <span class="error-text">{{$r.Failed}} failed</span>{{end}}</dd>
+    <dt>Cost</dt><dd>{{usd $r.Cost}} of {{usd $r.MaxCost}} · {{$r.Steps}} model {{plural $r.Steps "call" "calls"}} · {{tokens $r.InputTokens}} tokens in ({{tokens $r.CachedTokens}} cached), {{tokens $r.OutputTokens}} out</dd>
+    <dt>Queued</dt><dd>{{date $r.CreatedAt}}{{with $r.StartedByName}} by {{.}}{{end}}{{with $r.FinishedAt}} · finished {{date .}}{{end}}</dd>
+  </dl>
+  {{if $r.Active}}
+  <form method="post" action="{{base}}/admin/ai/runs/{{$r.ID}}/cancel"><button>Cancel</button></form>
+  {{else if $r.CanRestart}}
+  <form method="post" action="{{base}}/admin/ai/runs/{{$r.ID}}/restart"><button class="primary">Start again</button></form>
+  {{end}}
+</section>
+
+{{with $r.Summary}}
+<section class="card">
+  <h2>Summary</h2>
+  <p class="text">{{.}}</p>
+</section>
+{{end}}
+
+<h2>Log</h2>
+<ol class="run-log">
+  {{range .Data.Events}}<li><span class="muted">{{slice .CreatedAt 11 19}}</span> {{.Text}}</li>{{end}}
+</ol>
+{{end}}

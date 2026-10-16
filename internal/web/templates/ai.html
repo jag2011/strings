@@ -2,10 +2,12 @@
 {{$d := .Data}}
 <h1>AI translation</h1>
 {{with $d.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
-{{with $d.Plan}}<p class="note" role="status">{{.}}</p>{{end}}
 
 <section class="card">
   <h2>Translate</h2>
+  {{if not $d.Enabled}}
+  <p class="note outdated">AI translation needs an OpenRouter API key. Set <code>OPENROUTER_API_KEY</code> in the server's environment (<code>/etc/strings/strings.env</code> in production) and restart it.</p>
+  {{end}}
   {{if not $d.Users}}
   <p>There are no AI users yet. <a href="{{base}}/admin/users">Add one under Users</a>, then come back here.</p>
   {{else}}
@@ -26,6 +28,7 @@
       <div class="choices">
         <label class="check"><input type="radio" name="input" value="missing" {{if eq $d.Input "missing"}}checked{{end}}> Missing</label>
         <label class="check"><input type="radio" name="input" value="all" {{if eq $d.Input "all"}}checked{{end}}> All</label>
+        <p class="hint muted small">All leaves out approved strings; they still guide the wording.</p>
       </div>
     </fieldset>
     <fieldset>
@@ -35,8 +38,34 @@
         <p class="hint muted small">Otherwise missing strings get the translation directly. Existing translations are never replaced; they get suggestions.</p>
       </div>
     </fieldset>
-    <div class="span"><button class="primary">Translate</button></div>
+    <label class="span">Style notes
+      <textarea name="notes" rows="2" placeholder="Optional, e.g. informal “du”, keep game terms in English">{{$d.Notes}}</textarea>
+    </label>
+    <label>Cost limit in USD
+      <input name="max_cost" type="number" min="0.01" max="1000" step="0.01" value="{{$d.MaxCost}}" required>
+    </label>
+    <div class="span"><button class="primary" {{if not $d.Enabled}}disabled{{end}}>Translate</button></div>
   </form>
   {{end}}
 </section>
+
+{{with $d.Runs}}
+<h2>Runs</h2>
+<table class="runs">
+  <thead><tr><th>Run</th><th>Language</th><th>AI user</th><th>Status</th><th>Saved</th><th>Cost</th><th>Queued</th></tr></thead>
+  <tbody>
+  {{range .}}
+  <tr>
+    <td><a href="{{base}}/admin/ai/runs/{{.ID}}">#{{.ID}}</a></td>
+    <td><a href="{{base}}/t/{{.Lang}}">{{langName .Lang}}</a></td>
+    <td>{{.UserName}}</td>
+    <td>{{template "runStatus" .}}</td>
+    <td class="nowrap">{{.Translated}} translated · {{.Suggested}} suggested{{if .Failed}} · <span class="error-text">{{.Failed}} failed</span>{{end}}</td>
+    <td class="nowrap">{{usd .Cost}} <span class="muted">/ {{usd .MaxCost}}</span></td>
+    <td class="muted nowrap">{{date .CreatedAt}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
 {{end}}

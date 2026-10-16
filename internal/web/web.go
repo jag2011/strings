@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jag2011/strings/internal/ai"
 	"github.com/jag2011/strings/internal/arb"
 	"github.com/jag2011/strings/internal/store"
 )
@@ -34,6 +35,9 @@ type Server struct {
 	// the root. See underBase.
 	Base string
 
+	// AI runs AI translation jobs; nil without an OpenRouter key.
+	AI *ai.Runner
+
 	store    *store.Store
 	external *External // nil: no sign-in through an account server
 	pages    map[string]*template.Template
@@ -47,6 +51,17 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// tokens shortens a token count: 950, 12.3k, 4.1M.
+func tokens(n int64) string {
+	switch {
+	case n < 1000:
+		return fmt.Sprint(n)
+	case n < 1_000_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	}
+	return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
 }
 
 func New(s *store.Store, external *External) (*Server, error) {
@@ -73,6 +88,8 @@ func New(s *store.Store, external *External) (*Server, error) {
 		"langName": langName,
 		"flag":     flag,
 		"add":      func(a, b int) int { return a + b },
+		"usd":      func(v float64) string { return fmt.Sprintf("$%.2f", v) },
+		"tokens":   tokens,
 		"diff":     diffText,
 		// For the textarea: lang enables the browser's spell checker in the
 		// right language, dir handles right-to-left scripts.
@@ -145,6 +162,9 @@ func (srv *Server) Handler() http.Handler {
 	admin("POST /admin/users/ai", srv.adminCreateAIUser)
 	admin("GET /admin/ai", srv.aiPage)
 	admin("POST /admin/ai", srv.aiTranslate)
+	admin("GET /admin/ai/runs/{id}", srv.aiRun)
+	admin("POST /admin/ai/runs/{id}/cancel", srv.aiCancel)
+	admin("POST /admin/ai/runs/{id}/restart", srv.aiRestart)
 	admin("POST /admin/users/{id}", srv.adminUpdateUser)
 	admin("POST /admin/users/{id}/link", srv.adminUserLink)
 	admin("GET /admin/users/{id}/merge", srv.adminMergePage)

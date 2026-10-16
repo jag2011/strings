@@ -584,11 +584,11 @@ func TestSuggestions(t *testing.T) {
 	s, ctx := open(t), context.Background()
 	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana"}`), nil)
 	s.AddLanguage(ctx, "de")
-	opus, err := s.CreateAIUser(ctx, "Claude Opus", "claude-opus-5-5")
+	opus, err := s.CreateAIUser(ctx, "Claude Opus", "anthropic/claude-opus-5.5")
 	if err != nil || !opus.IsAI() || !opus.Unlisted {
 		t.Fatal(opus, err)
 	}
-	haiku, _ := s.CreateAIUser(ctx, "Claude Haiku", "claude-haiku-5-5")
+	haiku, _ := s.CreateAIUser(ctx, "Claude Haiku", "anthropic/claude-haiku-5.5")
 	tr, _ := s.CreateUser(ctx, "t@example.com", "Tom", "translator")
 	p, _ := s.CreateUser(ctx, "p@example.com", "Petra", "proofreader")
 
@@ -599,7 +599,7 @@ func TestSuggestions(t *testing.T) {
 	s.Suggest(ctx, "de", "a", "Apfel", opus.ID) // replaces the first
 	s.Suggest(ctx, "de", "a", "Der Apfel", haiku.ID)
 	e := entry(t, s, "de", "a")
-	if len(e.Suggestions) != 2 || e.Suggestions[0].Text != "Apfel" || e.Suggestions[0].AIModel != "claude-opus-5-5" {
+	if len(e.Suggestions) != 2 || e.Suggestions[0].Text != "Apfel" || e.Suggestions[0].AIModel != "anthropic/claude-opus-5.5" {
 		t.Fatalf("suggestions: %+v", e.Suggestions)
 	}
 	if rows, _, _ := s.List(ctx, "de", FilterAll, "", 0, 10); rows[0].Suggestions != 2 || rows[1].Suggestions != 0 {

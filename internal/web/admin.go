@@ -294,8 +294,9 @@ func (srv *Server) adminCreateUser(w http.ResponseWriter, r *http.Request, u *st
 	return srv.renderUsers(w, r, u, http.StatusOK, usersData{Link: srv.baseURL(r) + "/invite/" + token, For: nu})
 }
 
-// AIModels are offered when adding an AI user; any other model id works too.
-var AIModels = []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"}
+// AIModels are offered when adding an AI user; any other OpenRouter model
+// name works too (openrouter.ai/models).
+var AIModels = []string{"anthropic/claude-opus-5.5", "anthropic/claude-sonnet-5.5", "openai/gpt-5.5", "google/gemini-3.8-flash", "deepseek/deepseek-v4-pro"}
 
 func (srv *Server) adminCreateAIUser(w http.ResponseWriter, r *http.Request, u *store.User) error {
 	if _, err := srv.store.CreateAIUser(r.Context(), r.PostFormValue("name"), r.PostFormValue("model")); err != nil {

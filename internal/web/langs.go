@@ -70,6 +70,10 @@ func flag(code string) string {
 var scriptNames = map[string]string{"Hans": "Simplified", "Hant": "Traditional", "Latn": "Latin", "Cyrl": "Cyrillic"}
 
 // langName turns "pt_BR" into "Portuguese (BR)" and "zh_Hant" into "Chinese (Traditional)".
+// LangName returns the display name of a language code, like "German" for
+// de or "Portuguese (BR)" for pt_BR.
+func LangName(code string) string { return langName(code) }
+
 func langName(code string) string {
 	parts := strings.Split(code, "_")
 	name, ok := langNames[parts[0]]

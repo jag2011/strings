@@ -101,6 +101,11 @@
     });
   }
 
+  // Pages showing work in progress, like a running AI run, reload until
+  // it's done.
+  const reload = document.querySelector("[data-reload]");
+  if (reload) setTimeout(() => location.reload(), Number(reload.dataset.reload) * 1000);
+
   for (const el of document.querySelectorAll("[data-confirm]")) {
     el.addEventListener("click", (e) => {
       if (!confirm(el.dataset.confirm)) e.preventDefault();

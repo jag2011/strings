@@ -16,6 +16,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jag2011/strings/internal/ai"
 	"github.com/jag2011/strings/internal/arb"
 	"github.com/jag2011/strings/internal/store"
 )
@@ -731,7 +732,7 @@ func TestSuggestionsFlow(t *testing.T) {
 	tr := e.user("tr@example.com", "translator")
 	ctx := context.Background()
 
-	if res := e.post(admin, "/admin/users/ai", url.Values{"name": {"Claude Opus"}, "model": {"claude-opus-5-5"}}); res.StatusCode != http.StatusSeeOther {
+	if res := e.post(admin, "/admin/users/ai", url.Values{"name": {"Claude Opus"}, "model": {"anthropic/claude-opus-5.5"}}); res.StatusCode != http.StatusSeeOther {
 		t.Fatalf("add AI user: %d", res.StatusCode)
 	}
 	users, _ := e.store.Users(ctx)
@@ -741,7 +742,7 @@ func TestSuggestionsFlow(t *testing.T) {
 			ai = u
 		}
 	}
-	if ai == nil || ai.AIModel != "claude-opus-5-5" {
+	if ai == nil || ai.AIModel != "anthropic/claude-opus-5.5" {
 		t.Fatalf("AI user: %+v", ai)
 	}
 	if res := e.post(admin, fmt.Sprintf("/admin/users/%d/link", ai.ID), nil); res.StatusCode != http.StatusBadRequest {
@@ -784,55 +785,93 @@ func entrySuggestion(t *testing.T, e *env, key string) int64 {
 	return en.Suggestions[0].ID
 }
 
-func TestAIPage(t *testing.T) {
+// stoppingAgent ends every session at once, as a model with nothing to do.
+type stoppingAgent struct{}
+
+func (stoppingAgent) Run(context.Context, ai.Session) (string, error) { return "", nil }
+
+func TestAIPageOff(t *testing.T) {
 	e := setup(t)
 	admin := e.user("admin@example.com", "admin")
 	tr := e.user("tr@example.com", "translator")
-	ctx := context.Background()
-
 	if res, _ := e.get(tr, "/admin/ai"); res.StatusCode != http.StatusForbidden {
 		t.Errorf("translator: %d", res.StatusCode)
 	}
-	if _, body := e.get(admin, "/admin/ai"); !strings.Contains(body, "There are no AI users yet") {
-		t.Error("no hint without AI users")
+	if _, body := e.get(admin, "/admin/ai"); !strings.Contains(body, "There are no AI users yet") || !strings.Contains(body, "OPENROUTER_API_KEY") {
+		t.Error("no hints without AI users and key")
 	}
-	ai, _ := e.store.CreateAIUser(ctx, "Claude Opus", "claude-opus-5-5")
-	e.store.Save(ctx, "de", "bye", "Tschüss", 2, -1, store.KeepApproval)
+	ai, _ := e.store.CreateAIUser(context.Background(), "Claude Opus", "anthropic/claude-opus-5.5")
+	if _, body := e.get(admin, "/admin/ai"); !strings.Contains(body, `<button class="primary" disabled>Translate</button>`) {
+		t.Error("button enabled without key")
+	}
+	res := e.post(admin, "/admin/ai", url.Values{"lang": {"de"}, "user": {fmt.Sprint(ai.ID)}, "input": {"missing"}, "max_cost": {"5"}})
+	if res.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("queued without key: %d", res.StatusCode)
+	}
+}
+
+func TestAIPage(t *testing.T) {
+	e := setupWith(t, nil, func(s *Server) { s.AI = ai.NewRunner(s.store, stoppingAgent{}) })
+	admin := e.user("admin@example.com", "admin")
+	ctx := context.Background()
+	opus, _ := e.store.CreateAIUser(ctx, "Claude Opus", "anthropic/claude-opus-5.5")
+	e.store.Save(ctx, "de", "bye", "Tschüss", 1, -1, store.KeepApproval) // by admin
 	_, body := e.get(admin, "/admin/ai")
-	for _, want := range []string{"German (de) · 2 missing", "Claude Opus · claude-opus-5-5", `value="missing" checked`} {
+	for _, want := range []string{"German (de) · 2 missing", "Claude Opus · anthropic/claude-opus-5.5", `value="missing" checked`, `name="max_cost"`, `value="5"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("form misses %q", want)
 		}
 	}
 
-	post := func(v url.Values) (int, string) {
-		req, _ := http.NewRequest("POST", e.srv.URL+"/admin/ai", strings.NewReader(v.Encode()))
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		res, err := admin.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		b, _ := io.ReadAll(res.Body)
-		res.Body.Close()
-		return res.StatusCode, string(b)
-	}
-	id := fmt.Sprint(ai.ID)
-	for _, c := range []struct {
+	id := fmt.Sprint(opus.ID)
+	for i, c := range []struct {
 		v    url.Values
 		want string
 	}{
-		{url.Values{"lang": {"de"}, "user": {id}, "input": {"missing"}}, "translate 2 strings into German, saved as translations."},
-		{url.Values{"lang": {"de"}, "user": {id}, "input": {"all"}}, "2 missing as translations, 1 already translated as suggestions."},
-		{url.Values{"lang": {"de"}, "user": {id}, "input": {"all"}, "suggest": {"1"}}, "translate 3 strings into German, all saved as suggestions."},
+		{url.Values{"input": {"missing"}, "notes": {"informal du"}}, "queued by admin: 2 strings into German, as translations"},
+		{url.Values{"input": {"all"}}, "3 strings into German: 2 missing as translations, 1 already translated as suggestions"},
+		{url.Values{"input": {"all"}, "suggest": {"1"}}, "3 strings into German, all as suggestions"},
 	} {
-		if code, body := post(c.v); code != http.StatusOK || !strings.Contains(body, c.want) {
-			t.Errorf("%v: %d, misses %q", c.v, code, c.want)
+		c.v.Set("lang", "de")
+		c.v.Set("user", id)
+		c.v.Set("max_cost", "2.50")
+		res := e.post(admin, "/admin/ai", c.v)
+		run := fmt.Sprintf("/admin/ai/runs/%d", i+1)
+		if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != run {
+			t.Fatalf("%v: %d %s", c.v, res.StatusCode, res.Header.Get("Location"))
+		}
+		if _, body := e.get(admin, run); !strings.Contains(body, c.want) || !strings.Contains(body, "data-reload") || !strings.Contains(body, "of $2.50") {
+			t.Errorf("run %d misses %q", i+1, c.want)
 		}
 	}
-	if code, _ := post(url.Values{"lang": {"de"}, "user": {"2"}, "input": {"missing"}}); code != http.StatusUnprocessableEntity {
-		t.Errorf("a person as AI user: %d", code)
+	if r, _ := e.store.AIRun(ctx, 1); r.Status != store.AIQueued || r.Notes != "informal du" || r.MaxCost != 2.5 || r.Model != "anthropic/claude-opus-5.5" {
+		t.Errorf("run 1: %+v", r)
 	}
-	if code, _ := post(url.Values{"lang": {"xx"}, "user": {id}, "input": {"missing"}}); code != http.StatusUnprocessableEntity {
-		t.Errorf("unknown language: %d", code)
+	for _, v := range []url.Values{
+		{"lang": {"de"}, "user": {"1"}, "input": {"missing"}, "max_cost": {"5"}}, // a person
+		{"lang": {"xx"}, "user": {id}, "input": {"missing"}, "max_cost": {"5"}},
+		{"lang": {"de"}, "user": {id}, "input": {"missing"}, "max_cost": {"0"}},
+		{"lang": {"de"}, "user": {id}, "input": {"missing"}, "max_cost": {"lots"}},
+	} {
+		if res := e.post(admin, "/admin/ai", v); res.StatusCode != http.StatusUnprocessableEntity {
+			t.Errorf("%v: %d", v, res.StatusCode)
+		}
+	}
+
+	if res := e.post(admin, "/admin/ai/runs/1/cancel", nil); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("cancel: %d", res.StatusCode)
+	}
+	if _, body := e.get(admin, "/admin/ai/runs/1"); !strings.Contains(body, "cancelled before it started") || !strings.Contains(body, "Start again") || strings.Contains(body, "data-reload") {
+		t.Error("cancelled run page")
+	}
+	e.post(admin, "/admin/ai/runs/1/restart", nil)
+	if r, _ := e.store.AIRun(ctx, 1); r.Status != store.AIQueued {
+		t.Errorf("restarted: %s", r.Status)
+	}
+	if _, body := e.get(admin, "/admin/ai"); !strings.Contains(body, `href="/admin/ai/runs/3">#3</a>`) || !strings.Contains(body, "$0.00 <span class=\"muted\">/ $2.50") {
+		t.Error("runs table")
+	}
+	if res, _ := e.get(admin, "/admin/ai/runs/99"); res.StatusCode != http.StatusNotFound {
+		t.Errorf("unknown run: %d", res.StatusCode)
 	}
 }

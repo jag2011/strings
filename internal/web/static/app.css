@@ -112,7 +112,7 @@ ul.error, ul.warning { padding-left: 32px; }
 /* Forms */
 
 label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 12px; }
-label input, label select { display: block; width: 100%; margin-top: 4px; font-weight: normal; }
+label input, label select, label textarea { display: block; width: 100%; margin-top: 4px; font-weight: normal; }
 label.check { display: inline-flex; gap: 6px; align-items: center; font-weight: normal; margin: 0; }
 label.check input { width: auto; margin: 0; }
 fieldset { border: 0; padding: 0; margin: 0 0 12px; min-width: 0; }
@@ -354,3 +354,23 @@ summary { cursor: pointer; }
 .strings.activity .key { width: 22%; }
 .strings.activity td.change { width: 50%; }
 .activity td.change .tag { margin-bottom: 4px; }
+
+/* AI runs */
+
+.tag.run-running { background: var(--tint); color: var(--accent); }
+.tag.run-done { background: color-mix(in srgb, var(--done) 16%, transparent); color: var(--done); }
+.tag.run-failed { background: color-mix(in srgb, var(--missing) 16%, transparent); color: var(--missing); }
+.tag.run-cancelled, .tag.run-interrupted { background: color-mix(in srgb, var(--outdated) 18%, transparent); color: var(--outdated); }
+h1 .tag { vertical-align: middle; font-size: 13px; }
+.runs td { font-variant-numeric: tabular-nums; }
+@media (max-width: 720px) { .runs { display: block; overflow-x: auto; } }
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 20px; margin: 0 0 16px; }
+dl.facts dt { font-weight: 600; font-size: 13px; }
+dl.facts dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  dl.facts { grid-template-columns: 1fr; gap: 0; }
+  dl.facts dd { margin-bottom: 8px; }
+}
+.run-log { list-style: none; padding: 0; margin: 0; font-size: 14px; }
+.run-log li { padding: 3px 0; overflow-wrap: anywhere; }
+.run-log .muted { font-family: var(--mono); font-size: 12px; margin-right: 6px; }
