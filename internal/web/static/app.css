@@ -187,6 +187,8 @@ form.grid .span { grid-column: 1 / -1; }
 .stats { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
 .stats strong { font-variant-numeric: tabular-nums; }
 .side-card .bar { margin: 10px 0; }
+.project-icon { display: block; border-radius: 9px; margin-bottom: 10px; }
+.side-card.project .bar { margin-top: 16px; }
 .legend { gap: 4px; font-size: 13px; }
 .legend li { display: flex; align-items: center; gap: 8px; }
 .legend li span:nth-child(2) { flex: 1; }

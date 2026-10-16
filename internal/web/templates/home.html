@@ -25,8 +25,9 @@
 </ul>
 </div>
 <aside class="side">
-  <section class="side-card">
+  <section class="side-card project">
     <h2>Project</h2>
+    <img class="project-icon" src="{{static "brand.png"}}" alt="" width="36" height="36">
     {{with .Data}}
     <ul class="stats">
       <li><strong>{{.Total}}</strong> {{plural .Total "string" "strings"}} in {{langName .SourceLang}}</li>
