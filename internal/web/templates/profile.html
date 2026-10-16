@@ -36,6 +36,20 @@
     </ul>
   </section>
   {{end}}
+  {{if $.User.IsAdmin}}
+  <section class="side-card delete-user-versions">
+    <h2>Delete translations</h2>
+    <p class="side-note">Deletes every version {{$p.Name}} wrote and their suggestions. Where theirs is current, the version before it becomes current.</p>
+    <form method="post" action="{{base}}/admin/users/{{$p.ID}}/delete-translations">
+      <label class="check"><input type="checkbox" name="approved" value="1"> also delete approved</label>
+      <p><button class="danger small" name="scope" value="all" data-confirm="Delete all of {{$p.Name}}'s translations and suggestions in every language?">Delete all</button></p>
+      {{with $d.AllLangs}}<p class="row">
+        <select name="lang" aria-label="Language">{{range .}}<option value="{{.}}">{{langName .}}</option>{{end}}</select>
+        <button class="danger small" name="scope" value="lang" data-confirm="Delete all of {{$p.Name}}'s translations and suggestions in the chosen language?">Delete all for language</button>
+      </p>{{end}}
+    </form>
+  </section>
+  {{end}}
 </aside>
 </div>
 {{end}}

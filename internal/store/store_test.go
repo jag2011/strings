@@ -580,6 +580,62 @@ func TestDeleteVersion(t *testing.T) {
 	}
 }
 
+func TestDeleteUserVersions(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana", "c": "Cherry"}`), nil)
+	s.AddLanguage(ctx, "de")
+	s.AddLanguage(ctx, "fr")
+	one, _ := s.CreateUser(ctx, "one@example.com", "One", "translator")
+	two, _ := s.CreateUser(ctx, "two@example.com", "Two", "translator")
+	p, _ := s.CreateUser(ctx, "p@example.com", "Petra", "proofreader")
+
+	s.Save(ctx, "de", "a", "Apfel 1", one.ID, -1, KeepApproval)
+	s.Save(ctx, "de", "a", "Apfel 2", two.ID, -1, KeepApproval)
+	s.Save(ctx, "de", "a", "Apfel 3", one.ID, -1, KeepApproval)
+	s.Save(ctx, "de", "b", "Banane", one.ID, -1, KeepApproval)
+	s.Save(ctx, "de", "b", "Banane", p.ID, -1, Approve)
+	s.Save(ctx, "de", "c", "Kirsche", one.ID, -1, KeepApproval)
+	s.Save(ctx, "fr", "a", "Pomme 1", two.ID, -1, KeepApproval)
+	s.Save(ctx, "fr", "a", "Pomme 2", one.ID, -1, KeepApproval)
+	s.Save(ctx, "fr", "a", "Pomme 2", p.ID, -1, Approve)
+	s.Suggest(ctx, "de", "b", "Bananen", one.ID)
+	s.Suggest(ctx, "fr", "b", "Banane", one.ID)
+	s.Suggest(ctx, "de", "c", "Kirschen", two.ID)
+
+	// One language, approved versions kept.
+	v, g, err := s.DeleteUserVersions(ctx, one.ID, "de", false)
+	if err != nil || v != 3 || g != 1 {
+		t.Fatalf("deleted %d versions, %d suggestions: %v", v, g, err)
+	}
+	if e := entry(t, s, "de", "a"); e.Text != "Apfel 2" || e.UserName != "Two" || len(e.History) != 1 {
+		t.Fatalf("de/a: %+v", e)
+	}
+	if e := entry(t, s, "de", "b"); e.Text != "Banane" || !e.Approved {
+		t.Fatalf("de/b: %+v", e)
+	}
+	if e := entry(t, s, "de", "c"); e.Has || len(e.History) != 0 || len(e.Suggestions) != 1 {
+		t.Fatalf("de/c: %+v", e)
+	}
+	if e := entry(t, s, "fr", "a"); e.Text != "Pomme 2" || !e.Approved {
+		t.Fatalf("fr/a: %+v", e)
+	}
+
+	// Everything, approved too.
+	v, g, err = s.DeleteUserVersions(ctx, one.ID, "", true)
+	if err != nil || v != 2 || g != 1 {
+		t.Fatalf("deleted %d versions, %d suggestions: %v", v, g, err)
+	}
+	if e := entry(t, s, "de", "b"); e.Has {
+		t.Fatalf("de/b: %+v", e)
+	}
+	if e := entry(t, s, "fr", "a"); e.Text != "Pomme 1" || e.Approved || e.UserName != "Two" {
+		t.Fatalf("fr/a: %+v", e)
+	}
+	if v, g, err := s.DeleteUserVersions(ctx, one.ID, "", true); err != nil || v != 0 || g != 0 {
+		t.Fatalf("nothing left, deleted %d versions, %d suggestions: %v", v, g, err)
+	}
+}
+
 func TestSuggestions(t *testing.T) {
 	s, ctx := open(t), context.Background()
 	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana"}`), nil)

@@ -174,6 +174,7 @@ func (srv *Server) Handler() http.Handler {
 	admin("POST /admin/ai/runs/{id}/restart", srv.aiRestart)
 	admin("POST /admin/users/{id}", srv.adminUpdateUser)
 	admin("POST /admin/users/{id}/link", srv.adminUserLink)
+	admin("POST /admin/users/{id}/delete-translations", srv.adminDeleteUserVersions)
 	admin("GET /admin/users/{id}/merge", srv.adminMergePage)
 	admin("POST /admin/users/{id}/merge", srv.adminMerge)
 	page("GET /export/{file}", srv.exportFile)

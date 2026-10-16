@@ -370,6 +370,28 @@ func (srv *Server) adminUpdateUser(w http.ResponseWriter, r *http.Request, u *st
 	return redirect(w, r, "/admin/users", "User saved.")
 }
 
+// adminDeleteUserVersions deletes a user's translations and suggestions, in
+// all languages or the chosen one, from their profile page.
+func (srv *Server) adminDeleteUserVersions(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if _, err := srv.store.User(r.Context(), id); err != nil {
+		return err
+	}
+	lang, where := "", "in all languages"
+	if r.PostFormValue("scope") == "lang" {
+		if lang = r.PostFormValue("lang"); lang == "" {
+			return badRequest("Choose a language.")
+		}
+		where = "in " + langName(lang)
+	}
+	versions, suggestions, err := srv.store.DeleteUserVersions(r.Context(), id, lang, r.PostFormValue("approved") == "1")
+	if err != nil {
+		return err
+	}
+	return redirect(w, r, "/u/"+strconv.FormatInt(id, 10), fmt.Sprintf("Deleted %d %s and %d %s %s.",
+		versions, plural(versions, "version", "versions"), suggestions, plural(suggestions, "suggestion", "suggestions"), where))
+}
+
 func (srv *Server) adminUserLink(w http.ResponseWriter, r *http.Request, u *store.User) error {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	target, err := srv.store.User(r.Context(), id)

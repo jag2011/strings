@@ -193,6 +193,7 @@ form.grid .span { grid-column: 1 / -1; }
 .side { display: grid; gap: 16px; }
 .side-card h2:has(+ .side-note) { margin-bottom: 0; }
 .side-note { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
+.delete-user-versions .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .top-members { padding: 0; margin: 0; list-style: none; counter-reset: rank; display: grid; gap: 4px; }
 .top-members li { display: flex; gap: 8px; counter-increment: rank; }
 .top-members li::before { content: counter(rank); width: 18px; color: var(--muted); font-variant-numeric: tabular-nums; }

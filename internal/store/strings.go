@@ -490,6 +490,54 @@ func (s *Store) DeleteVersion(ctx context.Context, lang, key string, historyID i
 	})
 }
 
+// DeleteUserVersions removes the history entries a user wrote and their
+// suggestions, in one language or (lang "") in all. Approved current versions
+// are kept unless approved is true. Translations losing their current version
+// work as in DeleteVersion: the newest remaining version becomes current,
+// without approval, or the translation is removed when none is left.
+func (s *Store) DeleteUserVersions(ctx context.Context, userID int64, lang string, approved bool) (versions, suggestions int, err error) {
+	err = s.tx(ctx, func(tx *sql.Tx) error {
+		var ids string // JSON array of the history ids to delete
+		err := tx.QueryRowContext(ctx, `
+			SELECT json_group_array(h.id) FROM history h
+			LEFT JOIN translations t ON t.history_id = h.id
+			WHERE h.user_id = ?1 AND (?2 = '' OR h.lang = ?2) AND (?3 OR t.approved_by IS NULL)`,
+			userID, lang, approved).Scan(&ids)
+		if err != nil {
+			return err
+		}
+		const doomed = "(SELECT value FROM json_each(?1))"
+		const rest = "FROM history h WHERE h.lang = translations.lang AND h.key = translations.key AND h.id NOT IN " + doomed
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE translations SET (text, source_hash, origin, user_id, history_id) = (
+				SELECT text, source_hash, origin, user_id, id `+rest+` ORDER BY h.id DESC LIMIT 1),
+				approved_by = NULL, approved_at = NULL, updated_at = datetime('now')
+			WHERE history_id IN `+doomed+` AND EXISTS (SELECT 1 `+rest+`)`, ids); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM translations WHERE history_id IN "+doomed, ids); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM approval_log WHERE history_id IN "+doomed, ids); err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(ctx, "DELETE FROM history WHERE id IN "+doomed, ids)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		versions = int(n)
+		res, err = tx.ExecContext(ctx, "DELETE FROM suggestions WHERE user_id = ?1 AND (?2 = '' OR lang = ?2)", userID, lang)
+		if err != nil {
+			return err
+		}
+		n, _ = res.RowsAffected()
+		suggestions = int(n)
+		return nil
+	})
+	return versions, suggestions, err
+}
+
 type LangStats struct {
 	Lang                                  string
 	Total, Done, Outdated, Missing, Human int

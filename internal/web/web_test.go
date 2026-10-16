@@ -131,6 +131,27 @@ func TestProfile(t *testing.T) {
 	if _, body := e.get(tr, "/t/de/hello"); !strings.Contains(body, `<a href="/u/2">tr</a>`) {
 		t.Error("editor doesn't link the translator")
 	}
+
+	// Only admins can delete a user's translations.
+	if _, body := e.get(tr, "/u/2"); strings.Contains(body, "delete-translations") {
+		t.Error("translator sees the delete buttons")
+	}
+	if res := e.post(tr, "/admin/users/2/delete-translations", url.Values{"scope": {"all"}}); res.StatusCode != http.StatusForbidden {
+		t.Errorf("translator deleting: %d", res.StatusCode)
+	}
+	if _, body := e.get(admin, "/u/2"); !strings.Contains(body, "Delete all for language") {
+		t.Error("admin doesn't see the delete buttons")
+	}
+	e.store.Suggest(ctx, "de", "bye", "Tschüss", 2)
+	if res := e.post(admin, "/admin/users/2/delete-translations", url.Values{"scope": {"lang"}, "lang": {"de"}}); res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/u/2" {
+		t.Errorf("deleting: %d %s", res.StatusCode, res.Header.Get("Location"))
+	}
+	if en, _ := e.store.Entry(ctx, "de", "hello"); en.Has {
+		t.Error("translation not deleted")
+	}
+	if en, _ := e.store.Entry(ctx, "de", "bye"); len(en.Suggestions) != 0 {
+		t.Error("suggestion not deleted")
+	}
 }
 
 func TestPagesRender(t *testing.T) {

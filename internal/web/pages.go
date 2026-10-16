@@ -359,6 +359,7 @@ type profileData struct {
 	Approvals    int
 	Langs        []store.LangCount
 	Activity     activityData
+	AllLangs     []string // for admins deleting the user's translations
 }
 
 // profile shows a user's contributions and recent edits and approvals.
@@ -377,6 +378,11 @@ func (srv *Server) profile(w http.ResponseWriter, r *http.Request, u *store.User
 	}
 	if _, d.Approvals, err = srv.store.Contributions(r.Context(), p.ID); err != nil {
 		return err
+	}
+	if u.IsAdmin() {
+		if d.AllLangs, err = srv.store.Languages(r.Context()); err != nil {
+			return err
+		}
 	}
 	d.Activity = activityData{Path: "/u/" + strconv.FormatInt(p.ID, 10), Mine: true}
 	if err := srv.loadActivity(r, &d.Activity, p.ID); err != nil {
