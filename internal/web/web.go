@@ -87,7 +87,8 @@ func New(s *store.Store, external *External) (*Server, error) {
 		"esc":      url.PathEscape,
 		"static":   func(name string) string { return srv.Base + "/static/" + name + "?v=" + srv.static },
 		"base":     func() string { return srv.Base },
-		"date":     func(s string) string { return s[:min(len(s), 16)] + " UTC" },
+		"date":     func(s string) template.HTML { return timeTag(s, "date") },
+		"clock":    func(s string) template.HTML { return timeTag(s, "clock") },
 		"langName": langName,
 		"flag":     flag,
 		"add":      func(a, b int) int { return a + b },
@@ -436,4 +437,19 @@ func (srv *Server) requireLang(ctx context.Context, lang string) error {
 		return notFound()
 	}
 	return nil
+}
+
+// timeTag renders a stored UTC timestamp ("2006-01-02 15:04:05") as a <time>
+// element. The text is a UTC fallback; app.js rewrites it in the viewer's
+// locale and time zone.
+func timeTag(s, kind string) template.HTML {
+	t, err := time.Parse(time.DateTime, s)
+	if err != nil {
+		return template.HTML(template.HTMLEscapeString(s))
+	}
+	text := t.Format("2006-01-02 15:04") + " UTC"
+	if kind == "clock" {
+		text = t.Format("15:04:05")
+	}
+	return template.HTML(fmt.Sprintf(`<time datetime="%s" data-%s>%s</time>`, t.Format(time.RFC3339), kind, text))
 }

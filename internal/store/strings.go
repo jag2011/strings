@@ -748,6 +748,40 @@ func (s *Store) Next(ctx context.Context, lang, filter, q, currentKey string, po
 	return key, err
 }
 
+// KeyState is one line of the editor's key list.
+type KeyState struct {
+	Key      string
+	State    string // missing, outdated or done
+	Approved bool
+	Matches  bool // false for the current key when it falls outside filter and q
+}
+
+// Keys lists the keys matching filter and q in source order, plus current
+// even when it no longer matches, so the editor can show where it is.
+func (s *Store) Keys(ctx context.Context, lang, filter, q, current string) ([]KeyState, error) {
+	search, sargs := searchSQL(q)
+	match := filterSQL(filter) + search
+	rows, err := s.r.QueryContext(ctx, `SELECT s.key, t.key IS NOT NULL, coalesce(t.source_hash != s.hash, 0), t.approved_by IS NOT NULL, coalesce(`+match+`, 0)
+		FROM source_strings s LEFT JOIN translations t ON t.key = s.key AND t.lang = ?
+		WHERE s.removed = 0 AND s.draft = 0 AND (s.key = ? OR (`+match+`))
+		ORDER BY s.position`, append(append(append([]any{}, sargs...), lang, current), sargs...)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []KeyState
+	for rows.Next() {
+		var k KeyState
+		var has, outdated bool
+		if err := rows.Scan(&k.Key, &has, &outdated, &k.Approved, &k.Matches); err != nil {
+			return nil, err
+		}
+		k.State = Row{Has: has, Outdated: outdated}.State()
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
 type Entry struct {
 	Row
 	Meta        json.RawMessage

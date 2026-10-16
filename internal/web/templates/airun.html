@@ -31,6 +31,6 @@
 
 <h2>Log</h2>
 <ol class="run-log">
-  {{range .Data.Events}}<li><span class="muted">{{slice .CreatedAt 11 19}}</span> {{.Text}}</li>{{end}}
+  {{range .Data.Events}}<li><span class="muted">{{clock .CreatedAt}}</span> {{.Text}}</li>{{end}}
 </ol>
 {{end}}

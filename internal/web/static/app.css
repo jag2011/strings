@@ -35,6 +35,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 html { -webkit-text-size-adjust: 100%; }
 
@@ -222,6 +223,40 @@ form.grid .span { grid-column: 1 / -1; }
 .tag.approved { background: color-mix(in srgb, var(--done) 16%, transparent); color: var(--done); }
 .approved { color: var(--done); font-weight: 700; }
 
+/* Editor: the list being worked through, beside the editor */
+
+.editor-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 24px; align-items: start; }
+.keys {
+  position: sticky; top: 16px; max-height: calc(100vh - 32px);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+}
+.keys-head {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 13px;
+}
+/* Scrollable, but without a visible scrollbar. */
+.keys ol {
+  list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.keys ol::-webkit-scrollbar { display: none; }
+.keys li a {
+  display: flex; gap: 6px; padding: 1px 12px 1px 9px; border-left: 3px solid transparent;
+  font: 12px/1.7 var(--mono); color: color-mix(in srgb, var(--muted) 80%, var(--bg));
+}
+.keys li a > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.keys li a:hover { background: color-mix(in srgb, var(--line) 50%, transparent); color: var(--text); text-decoration: none; }
+.keys li a.missing { border-left-color: color-mix(in srgb, var(--missing) 60%, transparent); }
+.keys li a.outdated { border-left-color: color-mix(in srgb, var(--outdated) 60%, transparent); }
+.keys li a .approved { opacity: .6; }
+.keys li a.other { opacity: .6; }
+.keys li a[aria-current] { background: var(--tint); color: var(--accent); font-weight: 600; }
+@media (max-width: 860px) {
+  .editor-layout { grid-template-columns: 1fr; }
+  .keys { display: none; }
+}
+
 /* String list */
 
 .crumbs { margin: 0 0 4px; color: var(--muted); font-size: 13px; }
@@ -299,8 +334,7 @@ textarea {
   field-sizing: content;
 }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
-.actions .skip { margin-left: auto; }
-.actions .approve { margin-left: 8px; }
+.actions .approve { margin-left: auto; }
 textarea[readonly] { color: var(--muted); }
 .hint { margin-top: 8px; }
 

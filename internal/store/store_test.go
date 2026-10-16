@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -177,6 +178,15 @@ func TestListAndNext(t *testing.T) {
 	next, _ = s.Next(ctx, "de", FilterTodo, "", "d", 3)
 	if next != "a" {
 		t.Errorf("next wraps: %q", next)
+	}
+	// The current key stays in the list, marked, after leaving the filter.
+	keys, err := s.Keys(ctx, "de", FilterTodo, "", "b")
+	want := []KeyState{{"a", "missing", false, true}, {"b", "done", false, false}, {"c", "missing", false, true}, {"d", "missing", false, true}}
+	if err != nil || !reflect.DeepEqual(keys, want) {
+		t.Errorf("keys: %+v %v", keys, err)
+	}
+	if keys, err := s.Keys(ctx, "de", FilterAll, "%", "a"); err != nil || len(keys) != 2 || keys[0].Matches || !keys[1].Matches || keys[1].Key != "c" {
+		t.Errorf("keys with search: %+v %v", keys, err)
 	}
 }
 

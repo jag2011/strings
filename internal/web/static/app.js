@@ -1,5 +1,35 @@
 // Progressive enhancement. Every page works without this file.
 (() => {
+  // Timestamps arrive in UTC; show them in the viewer's locale and time zone,
+  // relative when recent. The full date and time is in the tooltip.
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  const hm = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
+  const hms = new Intl.DateTimeFormat(undefined, { timeStyle: "medium" });
+  const md = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+  const ymd = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
+  const full = new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeStyle: "long" });
+  const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const friendly = (t, now) => {
+    const mins = Math.round((now - t) / 60000);
+    if (mins >= 0 && mins < 1) return rtf.format(0, "second");
+    if (mins >= 0 && mins < 60) return rtf.format(-mins, "minute");
+    const days = Math.round((startOfDay(now) - startOfDay(t)) / 86400000);
+    if (days === 0 || days === 1) return `${rtf.format(-days, "day")}, ${hm.format(t)}`;
+    if (t.getFullYear() === now.getFullYear()) return `${md.format(t)}, ${hm.format(t)}`;
+    return ymd.format(t);
+  };
+  const localizeTimes = (root) => {
+    const now = new Date();
+    for (const el of root.querySelectorAll("time[datetime]")) {
+      const t = new Date(el.dateTime);
+      if (isNaN(t)) continue;
+      el.textContent = el.hasAttribute("data-clock") ? hms.format(t) : friendly(t, now);
+      el.title = full.format(t);
+    }
+  };
+  localizeTimes(document);
+  setInterval(() => localizeTimes(document), 60000);
+
   const editor = document.querySelector("[data-editor]");
   if (editor) {
     const text = editor.querySelector("textarea");
@@ -11,9 +41,9 @@
 
     // Ctrl/Cmd+Enter: save and next (or "Save anyway" when shown). Approved
     // strings have no save buttons for translators.
-    const primary = editor.querySelector("button.primary");
+    const primary = editor.querySelector("[data-save-next]") || editor.querySelector("button.primary");
     if (primary) {
-      editor.querySelector("[data-hint]").hidden = false;
+      editor.querySelector("[data-hint]").hidden = !primary.matches("[data-save-next]");
       text.addEventListener("keydown", (e) => {
         if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
           e.preventDefault();
@@ -49,6 +79,27 @@
     });
   }
 
+  // Key list beside the editor: keep its scroll position from page to page,
+  // and bring the current key into view when it isn't.
+  const keys = document.querySelector("[data-keys] ol");
+  if (keys) {
+    try {
+      keys.scrollTop = Number(sessionStorage.getItem("keys-scroll")) || 0;
+    } catch {}
+    const current = keys.querySelector("[aria-current]");
+    if (current) {
+      const top = current.offsetTop - keys.offsetTop;
+      if (top < keys.scrollTop || top + current.offsetHeight > keys.scrollTop + keys.clientHeight) {
+        keys.scrollTop = top - keys.clientHeight / 2;
+      }
+    }
+    window.addEventListener("pagehide", () => {
+      try {
+        sessionStorage.setItem("keys-scroll", keys.scrollTop);
+      } catch {}
+    });
+  }
+
   // Filter the list while typing: fetch the same page with the new query and
   // swap in the results. Enter still submits the form normally.
   const search = document.querySelector("[data-search]");
@@ -67,7 +118,10 @@
         const doc = new DOMParser().parseFromString(await res.text(), "text/html");
         for (const sel of ["[data-results]", ".tabs"]) {
           const next = doc.querySelector(sel);
-          if (next) document.querySelector(sel)?.replaceWith(next);
+          if (next) {
+            localizeTimes(next);
+            document.querySelector(sel)?.replaceWith(next);
+          }
         }
         history.replaceState(null, "", url);
       } catch (e) {

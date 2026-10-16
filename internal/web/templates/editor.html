@@ -1,5 +1,15 @@
 {{define "content"}}
 {{$d := .Data}}{{$e := $d.Entry}}{{$canApprove := .User.CanApprove}}
+<div class="editor-layout">
+<nav class="keys" aria-label="Strings in this list" data-keys>
+  <p class="keys-head"><a href="{{base}}{{$d.ListURL}}">{{$d.Filter}}{{with $d.Q}} · “{{.}}”{{end}}</a> <span class="badge">{{$d.KeysMatching}}</span></p>
+  <ol>
+  {{range $d.Keys}}
+    <li><a class="{{.State}}{{if not .Matches}} other{{end}}" href="{{base}}/t/{{$d.Lang}}/{{esc .Key}}{{query "filter" $d.Filter "q" $d.Q}}" title="{{.Key}}"{{if eq .Key $e.Key}} aria-current="page"{{end}}><span>{{.Key}}</span>{{if .Approved}}<span class="approved" aria-label="approved">✓</span>{{end}}</a></li>
+  {{end}}
+  </ol>
+</nav>
+<div>
 <p class="crumbs"><a href="{{base}}/">Languages</a> / <a href="{{base}}{{$d.ListURL}}">{{langName $d.Lang}}</a> /</p>
 <h1 class="key-title">{{$e.Key}}</h1>
 
@@ -43,18 +53,20 @@
   <div class="actions">
     {{if or $canApprove (not $e.Approved)}}
     {{if and $d.Warns (not $d.Errors)}}
+    <input type="hidden" name="action" value="stay">
     <button class="primary" name="force" value="1">Save anyway</button>
     {{else}}
-    <button class="primary" name="action" value="next" title="Ctrl+Enter">Save &amp; next</button>
-    <button name="action" value="stay">Save</button>
+    <button class="primary" name="action" value="stay">Save</button>
+    {{/* Ctrl+Enter in app.js: save and open the next string. */}}
+    <button name="action" value="next" hidden data-save-next></button>
     {{end}}
+    <button type="button" data-copy-source hidden>Copy source</button>
+    {{end}}
+    {{with $d.NextKey}}<a class="button" href="{{base}}/t/{{$d.Lang}}/{{esc .}}{{query "filter" $d.Filter "q" $d.Q}}">Next →</a>{{end}}
     {{if $canApprove}}
     <input type="hidden" name="was_approved" value="{{if $e.Approved}}1{{end}}">
     <label class="check approve"><input type="checkbox" name="approved" value="1" {{if $d.Approved}}checked{{end}} data-approve> Approved</label>
     {{end}}
-    <button type="button" data-copy-source hidden>Copy source</button>
-    {{end}}
-    {{with $d.NextKey}}<a class="skip" href="{{base}}/t/{{$d.Lang}}/{{esc .}}{{query "filter" $d.Filter "q" $d.Q}}">Skip →</a>{{end}}
   </div>
   <p class="muted small hint" hidden data-hint><kbd>Ctrl</kbd>+<kbd>Enter</kbd> saves and opens the next string.</p>
 </form>
@@ -124,4 +136,6 @@
   </ol>
 </section>
 {{end}}
+</div>
+</div>
 {{end}}

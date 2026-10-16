@@ -164,7 +164,7 @@ func TestPagesRender(t *testing.T) {
 		}
 	}
 	_, body := e.get(c, "/t/de/hello")
-	for _, want := range []string{"Hello {name}!", "Greeting", `lang="de"`, "Save &amp; next"} {
+	for _, want := range []string{"Hello {name}!", "Greeting", `lang="de"`, "data-save-next"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("editor misses %q", want)
 		}
@@ -270,7 +270,7 @@ func TestApprovalFlow(t *testing.T) {
 
 	// Now translators can't edit it.
 	_, body := e.get(tr, "/t/de/bye")
-	if !strings.Contains(body, "readonly") || strings.Contains(body, "Save &amp; next") {
+	if !strings.Contains(body, "readonly") || strings.Contains(body, "data-save-next") {
 		t.Error("translator editor should be read-only")
 	}
 	if res := e.post(tr, "/t/de/bye", url.Values{"text": {"Ciao"}, "base": {base()}}); res.StatusCode != http.StatusConflict {

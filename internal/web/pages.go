@@ -115,6 +115,8 @@ type editorData struct {
 	Conflict        bool
 	ListURL         string
 	NextKey         string
+	Keys            []store.KeyState // the list being worked through, for the side column
+	KeysMatching    int              // Keys minus the current key when it no longer matches
 }
 
 func (srv *Server) editorState(r *http.Request, lang, key string) (*editorData, error) {
@@ -144,6 +146,15 @@ func (srv *Server) editorState(r *http.Request, lang, key string) (*editorData, 
 	}
 	d.ListURL += "#" + key
 	d.NextKey, err = srv.store.Next(r.Context(), lang, d.Filter, d.Q, key, e.Position)
+	if err != nil {
+		return nil, err
+	}
+	d.Keys, err = srv.store.Keys(r.Context(), lang, d.Filter, d.Q, key)
+	for _, k := range d.Keys {
+		if k.Matches {
+			d.KeysMatching++
+		}
+	}
 	return d, err
 }
 
