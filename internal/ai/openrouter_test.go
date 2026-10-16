@@ -1,9 +1,11 @@
 package ai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -37,13 +39,18 @@ func (f *fakeResponses) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": {"message": "no more outputs"}}`, http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	io.WriteString(w, `{"id": "resp_`+string(rune('a'+n))+`", "object": "response", "created_at": 1, "completed_at": 2, "model": "test/model",
-		"status": "completed", "output": `+f.outputs[n]+`, "error": null, "incomplete_details": null, "instructions": null,
+	// Streamed like the real API: the body is read after the SDK's Send
+	// returned, which a plain JSON answer wouldn't test.
+	event := []byte(`{"type": "response.completed", "sequence_number": 0, "response": {"id": "resp_` + string(rune('a'+n)) + `", "object": "response", "created_at": 1, "completed_at": 2, "model": "test/model",
+		"status": "completed", "output": ` + f.outputs[n] + `, "error": null, "incomplete_details": null, "instructions": null,
 		"metadata": {}, "parallel_tool_calls": true, "temperature": null, "top_p": null, "frequency_penalty": null,
 		"presence_penalty": null, "tool_choice": "auto", "tools": [],
 		"usage": {"input_tokens": 1200, "input_tokens_details": {"cached_tokens": 1000}, "output_tokens": 30,
-			"output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 1230, "cost": 0.0125}}`)
+			"output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 1230, "cost": 0.0125}}}`)
+	var line bytes.Buffer // an SSE data line can't span lines
+	json.Compact(&line, event)
+	w.Header().Set("Content-Type", "text/event-stream")
+	fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", line.Bytes())
 }
 
 const (

@@ -790,6 +790,38 @@ type stoppingAgent struct{}
 
 func (stoppingAgent) Run(context.Context, ai.Session) (string, error) { return "", nil }
 
+func TestAIUserModels(t *testing.T) {
+	models := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"data": [{"id": "anthropic/claude-opus-5.5", "name": "Anthropic: Claude Opus 5.5",
+			"architecture": {"output_modalities": ["text"]}, "pricing": {"prompt": "0.000004", "completion": "0.00002"},
+			"supported_parameters": ["tools"]}]}`)
+	}))
+	defer models.Close()
+	e := setupWith(t, nil, func(s *Server) {
+		s.Models = ai.NewCatalog()
+		s.Models.URL = models.URL
+	})
+	admin := e.user("admin@example.com", "admin")
+	if _, body := e.get(admin, "/admin/users"); !strings.Contains(body, `<option value="anthropic/claude-opus-5.5">Anthropic: Claude Opus 5.5 · $4 / $20 per M tokens</option>`) {
+		t.Error("model list missing")
+	}
+	if res := e.post(admin, "/admin/users/ai", url.Values{"name": {"Typo"}, "model": {"anthropic/claude-opus-55"}}); res.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("unknown model: %d", res.StatusCode)
+	}
+	if res := e.post(admin, "/admin/users/ai", url.Values{"name": {"Opus"}, "model": {"anthropic/claude-opus-5.5"}}); res.StatusCode != http.StatusSeeOther {
+		t.Errorf("listed model: %d", res.StatusCode)
+	}
+	// A model that is no longer listed stays when saving other changes.
+	old, _ := e.store.CreateAIUser(context.Background(), "Old", "openai/gpt-4")
+	path := fmt.Sprintf("/admin/users/%d", old.ID)
+	if res := e.post(admin, path, url.Values{"name": {"Older"}, "ai_model": {"openai/gpt-4"}}); res.StatusCode != http.StatusSeeOther {
+		t.Errorf("unlisted, unchanged: %d", res.StatusCode)
+	}
+	if res := e.post(admin, path, url.Values{"name": {"Older"}, "ai_model": {"openai/gpt-4.1"}}); res.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("changed to unlisted: %d", res.StatusCode)
+	}
+}
+
 func TestAIPageOff(t *testing.T) {
 	e := setup(t)
 	admin := e.user("admin@example.com", "admin")

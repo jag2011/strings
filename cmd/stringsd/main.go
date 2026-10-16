@@ -165,6 +165,7 @@ func serve(dbPath, addr, base string, ext *web.External, trustProxy bool) error 
 		}
 		srv.TrustProxy = trustProxy
 		srv.Base = base
+		srv.Models = ai.NewCatalog()
 		hs := &http.Server{
 			Addr:              addr,
 			Handler:           srv.Handler(),

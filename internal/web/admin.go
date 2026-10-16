@@ -3,6 +3,7 @@ package web
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +14,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/jag2011/strings/internal/ai"
 	"github.com/jag2011/strings/internal/arb"
 	"github.com/jag2011/strings/internal/store"
 )
@@ -255,7 +258,7 @@ type usersData struct {
 	For    *store.User
 	Error  string
 	App    string // name of the external account server
-	Models []string
+	Models []ai.Model
 }
 
 func (srv *Server) renderUsers(w http.ResponseWriter, r *http.Request, u *store.User, status int, d usersData) error {
@@ -266,7 +269,7 @@ func (srv *Server) renderUsers(w http.ResponseWriter, r *http.Request, u *store.
 	if srv.external != nil {
 		d.App = srv.external.Name
 	}
-	d.Models = AIModels
+	d.Models, _ = srv.aiModels(r.Context())
 	return srv.render(w, r, status, "users", u, "Users", d)
 }
 
@@ -294,12 +297,47 @@ func (srv *Server) adminCreateUser(w http.ResponseWriter, r *http.Request, u *st
 	return srv.renderUsers(w, r, u, http.StatusOK, usersData{Link: srv.baseURL(r) + "/invite/" + token, For: nu})
 }
 
-// AIModels are offered when adding an AI user; any other OpenRouter model
-// name works too (openrouter.ai/models).
-var AIModels = []string{"anthropic/claude-opus-5.5", "anthropic/claude-sonnet-5.5", "openai/gpt-5.5", "google/gemini-3.8-flash", "deepseek/deepseek-v4-pro"}
+// AIModels are offered for AI users when OpenRouter's model list can't be
+// loaded; any other OpenRouter model name works too.
+var AIModels = []ai.Model{
+	{ID: "anthropic/claude-opus-5.5", Name: "Anthropic: Claude Opus 5.5"},
+	{ID: "anthropic/claude-sonnet-5.5", Name: "Anthropic: Claude Sonnet 5.5"},
+	{ID: "openai/gpt-5.5", Name: "OpenAI: GPT-5.5"},
+	{ID: "google/gemini-3.8-flash", Name: "Google: Gemini 3.8 Flash"},
+	{ID: "deepseek/deepseek-v4-pro", Name: "DeepSeek: DeepSeek V4 Pro"},
+}
+
+// aiModels returns OpenRouter's models usable for AI users (live), or
+// AIModels if that list isn't available. The wait is limited, since the
+// first load blocks the page.
+func (srv *Server) aiModels(ctx context.Context) (models []ai.Model, live bool) {
+	if srv.Models != nil {
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		if ms := srv.Models.Models(ctx); ms != nil {
+			return ms, true
+		}
+	}
+	return AIModels, false
+}
+
+// checkAIModel rejects models missing from OpenRouter's list, like typos.
+// Without the list, any name passes.
+func (srv *Server) checkAIModel(ctx context.Context, model string) error {
+	model = strings.TrimSpace(model)
+	ms, live := srv.aiModels(ctx)
+	if !live || model == "" || slices.ContainsFunc(ms, func(m ai.Model) bool { return m.ID == model }) {
+		return nil
+	}
+	return fmt.Errorf("OpenRouter has no model %q that can call tools; pick one from the list", model)
+}
 
 func (srv *Server) adminCreateAIUser(w http.ResponseWriter, r *http.Request, u *store.User) error {
-	if _, err := srv.store.CreateAIUser(r.Context(), r.PostFormValue("name"), r.PostFormValue("model")); err != nil {
+	err := srv.checkAIModel(r.Context(), r.PostFormValue("model"))
+	if err == nil {
+		_, err = srv.store.CreateAIUser(r.Context(), r.PostFormValue("name"), r.PostFormValue("model"))
+	}
+	if err != nil {
 		return srv.renderUsers(w, r, u, http.StatusUnprocessableEntity, usersData{Error: err.Error()})
 	}
 	return redirect(w, r, "/admin/users", "AI user added.")
@@ -314,7 +352,13 @@ func (srv *Server) adminUpdateUser(w http.ResponseWriter, r *http.Request, u *st
 	role := r.PostFormValue("role")
 	if target.IsAI() {
 		role = "translator"
-		err = srv.store.SetAIModel(r.Context(), id, r.PostFormValue("ai_model"))
+		// A model no longer listed can stay; only a changed one is checked.
+		if model := strings.TrimSpace(r.PostFormValue("ai_model")); model != target.AIModel {
+			err = srv.checkAIModel(r.Context(), model)
+		}
+		if err == nil {
+			err = srv.store.SetAIModel(r.Context(), id, r.PostFormValue("ai_model"))
+		}
 	}
 	if err == nil {
 		err = srv.store.UpdateUser(r.Context(), id, r.PostFormValue("name"), role,

@@ -37,6 +37,8 @@ type Server struct {
 
 	// AI runs AI translation jobs; nil without an OpenRouter key.
 	AI *ai.Runner
+	// Models lists the models for AI users; nil offers a built-in list.
+	Models *ai.Catalog
 
 	store    *store.Store
 	external *External // nil: no sign-in through an account server

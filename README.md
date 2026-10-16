@@ -168,8 +168,9 @@ OPENROUTER_API_KEY=sk-or-…
 ```
 
 1. Under *Users*, add an AI user with an OpenRouter model name, like
-   `anthropic/claude-opus-5.5` or `openai/gpt-5.5`
-   ([models](https://openrouter.ai/models)).
+   `anthropic/claude-opus-5.5` or `openai/gpt-5.5`. The model field offers
+   OpenRouter's current models that can call tools, with their prices
+   (loaded from its public model list, refreshed every 6 hours).
 2. Under *AI*, pick a language, the AI user, *Missing* or *All* strings,
    optional style notes and a cost limit, and press *Translate*. The run
    starts in the background; its page shows progress, cost and a log.

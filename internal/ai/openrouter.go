@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	agent "github.com/OpenRouterTeam/go-agent"
@@ -32,7 +33,10 @@ func newOpenRouter(apiKey string, opts ...openrouter.SDKOption) *OpenRouter {
 			Backoff:               &retry.BackoffStrategy{InitialInterval: 1000, MaxInterval: 30000, Exponent: 1.5, MaxElapsedTime: 300000},
 			RetryConnectionErrors: true,
 		}),
-		openrouter.WithTimeout(10 * time.Minute),
+		// Not WithTimeout: the SDK cancels that context when Send returns,
+		// before a streamed answer is read. The client's timeout covers the
+		// whole response.
+		openrouter.WithClient(&http.Client{Timeout: 10 * time.Minute}),
 	}, opts...)...)
 	return &OpenRouter{client: agent.SDKClient{Client: sdk}}
 }
