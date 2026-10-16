@@ -4,12 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{with .Title}}{{.}} · {{end}}{{.Settings.name}}</title>
+<link rel="icon" href="{{base}}/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="{{static "app.css"}}">
 <script src="{{static "app.js"}}" defer></script>
 </head>
 <body>
 <header class="top">
-  <a class="brand" href="{{base}}/">{{.Settings.name}}</a>
+  <a class="brand" href="{{base}}/">{{template "logo"}}{{.Settings.name}}</a>
   {{with .User}}
   <nav>
     <a href="{{base}}/" {{if eq $.Nav "home"}}aria-current="page"{{end}}>{{template "icon" "languages"}}Languages</a>

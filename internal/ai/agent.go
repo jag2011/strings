@@ -59,6 +59,6 @@ func (t Tool) sdkTool() agent.Tool {
 // as strict mode wants. The order is fixed, since the tools are part of the
 // cached prompt prefix.
 func object(props map[string]any) map[string]any {
-	req := slices.Sorted(maps.Keys(props))
+	req := append([]string{}, slices.Sorted(maps.Keys(props))...) // [], not null
 	return map[string]any{"type": "object", "properties": props, "required": req, "additionalProperties": false}
 }

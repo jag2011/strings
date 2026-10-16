@@ -72,11 +72,11 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
   background: var(--surface);
   view-transition-name: top;
 }
-.brand { font-weight: 700; color: var(--text); font-size: 17px; justify-self: start; margin-right: 16px; }
-.brand::before {
-  content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 3px;
-  background: var(--accent); margin-right: 8px;
+.brand {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-weight: 700; color: var(--text); font-size: 17px; justify-self: start; margin-right: 16px;
 }
+.brand .logo { width: 24px; height: 24px; flex-shrink: 0; color: var(--accent); }
 .top nav { display: flex; gap: 4px 14px; flex-wrap: wrap; align-items: center; }
 .top nav a { color: var(--muted); }
 .top nav a[aria-current] { color: var(--text); font-weight: 600; }

@@ -103,7 +103,8 @@ func TestOpenRouterSession(t *testing.T) {
 		t.Errorf("cache_control: %v", req["cache_control"])
 	}
 	tool := req["tools"].([]any)[0].(map[string]any)
-	if tool["name"] != "get_job" || tool["strict"] != true || tool["parameters"].(map[string]any)["additionalProperties"] != false {
+	params := tool["parameters"].(map[string]any)
+	if tool["name"] != "get_job" || tool["strict"] != true || params["additionalProperties"] != false || params["required"] == nil {
 		t.Errorf("tool: %v", tool)
 	}
 	// The second call carries the tool's result.

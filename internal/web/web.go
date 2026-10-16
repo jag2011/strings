@@ -43,6 +43,7 @@ type Server struct {
 	store    *store.Store
 	external *External // nil: no sign-in through an account server
 	pages    map[string]*template.Template
+	icons    *template.Template // for the favicon
 	limiter  *limiter
 	static   string // cache-busting suffix for static URLs
 }
@@ -104,6 +105,7 @@ func New(s *store.Store, external *External) (*Server, error) {
 			return "ltr"
 		},
 	}
+	srv.icons = template.Must(template.ParseFS(templateFS, "templates/_icons.html"))
 	// Files starting with "_" hold templates shared by several pages.
 	layout := template.Must(template.New("layout.html").Funcs(funcs).ParseFS(templateFS, "templates/layout.html", "templates/_*.html"))
 	names, _ := fs.Glob(templateFS, "templates/*.html")
@@ -129,6 +131,7 @@ func (srv *Server) Handler() http.Handler {
 	static, _ := fs.Sub(staticFS, "static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", cacheForever(http.FileServerFS(static))))
 	mux.HandleFunc("GET /health", srv.health)
+	mux.HandleFunc("GET /favicon.svg", srv.favicon)
 	mux.HandleFunc("GET /login", srv.loginPage)
 	mux.HandleFunc("POST /login", srv.login)
 	mux.HandleFunc("POST /logout", srv.logout)
@@ -256,6 +259,18 @@ func (srv *Server) health(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	fmt.Fprintln(w, "ok")
+}
+
+// favicon serves the logo in the accent color.
+func (srv *Server) favicon(w http.ResponseWriter, r *http.Request) {
+	set, err := srv.store.Settings(r.Context())
+	if err != nil {
+		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Cache-Control", "max-age=3600")
+	srv.icons.ExecuteTemplate(w, "logo", set["accent"])
 }
 
 // pageCtx is passed to every template.

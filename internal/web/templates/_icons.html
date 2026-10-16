@@ -9,3 +9,7 @@
 {{- else if eq . "logout"}}<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/>
 {{- end -}}
 </svg>{{end}}
+{{/* The ball of yarn next to the name, also served as /favicon.svg with the accent color passed in. */}}
+{{define "logo"}}<svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"{{with .}} color="{{.}}"{{end}}>
+<circle cx="9" cy="12.5" r="7"/><path d="M4 7.6c3 1.6 5.4 5.4 5.6 11.8M7.6 5.65c3.4 2.2 6 6 7 11.05M2.05 13.7c4-2.8 8.8-4.4 12.85-4.9"/><path d="M12.5 18.56c1.3.6 2.8.94 4.5.94 1.5 0 2.2-1.2 3.4-1.2.8 0 1.4.5 2.1 1.2"/>
+</svg>{{end}}
