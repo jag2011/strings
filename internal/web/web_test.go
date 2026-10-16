@@ -787,6 +787,11 @@ func TestSuggestionsFlow(t *testing.T) {
 	if en, _ := e.store.Entry(ctx, "de", "hello"); en.Text != "Hallo {name}!" || en.UserID != ai.ID || en.Origin != "machine" {
 		t.Errorf("used: %+v", en.Row)
 	}
+	// One the same as the current translation is greyed out and can only be deleted.
+	e.store.Suggest(ctx, "de", "hello", "Hallo {name}!", ai.ID)
+	if _, body := e.get(admin, "/t/de/hello"); !strings.Contains(body, `<li class="same">`) || strings.Contains(body, `/use"`) || !strings.Contains(body, ">Delete</button>") {
+		t.Error("editor shows the same suggestion wrong")
+	}
 	// Suggestions with errors can't be used.
 	e.post(tr, fmt.Sprintf("/t/de/bye/suggestions/%d/use", entrySuggestion(t, e, "bye")), url.Values{"base": {"0"}})
 	if en, _ := e.store.Entry(ctx, "de", "bye"); en.Has {

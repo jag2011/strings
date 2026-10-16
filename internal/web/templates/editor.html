@@ -64,21 +64,21 @@
   <summary><h2>Suggestions <span class="badge">{{len .}}</span></h2></summary>
   <ul>
   {{range .}}
-    <li>
+    <li{{if .Same}} class="same"{{end}}>
       <p class="text" lang="{{bcp47 $d.Lang}}" dir="{{dir $d.Lang}}">{{.Text}}</p>
       <p class="muted small">
-        <a href="{{base}}/u/{{.UserID}}">{{.UserName}}</a>{{if .AIModel}} <span class="tag" title="{{.AIModel}}">AI</span>{{end}} · {{date .CreatedAt}}
+        <a href="{{base}}/u/{{.UserID}}">{{.UserName}}</a>{{if .AIModel}} <span class="tag" title="{{.AIModel}}">AI</span>{{end}} · {{date .CreatedAt}}{{if .Same}} · same as the current translation{{end}}
       </p>
-      {{if or $canApprove (not $e.Approved)}}
+      {{if or (and .Same $canApprove) (and (not .Same) (or $canApprove (not $e.Approved)))}}
       <form method="post" class="actions">
         <input type="hidden" name="base" value="{{$e.HistoryID}}">
         <input type="hidden" name="filter" value="{{$d.Filter}}">
         <input type="hidden" name="q" value="{{$d.Q}}">
+        {{if not .Same}}
         <button class="small" formaction="{{base}}/t/{{$d.Lang}}/{{esc $e.Key}}/suggestions/{{.ID}}/use">Use</button>
-        {{if $canApprove}}
-        <button class="small" formaction="{{base}}/t/{{$d.Lang}}/{{esc $e.Key}}/suggestions/{{.ID}}/use" name="approve" value="1">Use &amp; approve</button>
-        <button class="small" formaction="{{base}}/t/{{$d.Lang}}/{{esc $e.Key}}/suggestions/{{.ID}}/dismiss">Dismiss</button>
+        {{if $canApprove}}<button class="small" formaction="{{base}}/t/{{$d.Lang}}/{{esc $e.Key}}/suggestions/{{.ID}}/use" name="approve" value="1">Use &amp; approve</button>{{end}}
         {{end}}
+        {{if $canApprove}}<button class="small" formaction="{{base}}/t/{{$d.Lang}}/{{esc $e.Key}}/suggestions/{{.ID}}/dismiss">Delete</button>{{end}}
       </form>
       {{end}}
     </li>

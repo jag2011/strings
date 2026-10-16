@@ -677,10 +677,14 @@ func TestSuggestions(t *testing.T) {
 		t.Fatalf("used: %+v", e)
 	}
 
-	// A suggestion equal to the current text is hidden.
+	// A suggestion equal to the current text is listed, marked as the same,
+	// but not counted in the list.
 	s.Suggest(ctx, "de", "a", "Apfel", haiku.ID)
-	if e := entry(t, s, "de", "a"); len(e.Suggestions) != 0 {
+	if e := entry(t, s, "de", "a"); len(e.Suggestions) != 1 || !e.Suggestions[0].Same {
 		t.Errorf("same as current: %+v", e.Suggestions)
+	}
+	if rows, _, _ := s.List(ctx, "de", FilterAll, "", 0, 10); rows[0].Suggestions != 0 {
+		t.Errorf("same as current counted: %+v", rows[0])
 	}
 	s.Suggest(ctx, "de", "a", "Der Apfel", haiku.ID)
 

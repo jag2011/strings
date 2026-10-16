@@ -315,7 +315,7 @@ func (srv *Server) dismissSuggestion(w http.ResponseWriter, r *http.Request, u *
 	if err := srv.store.DismissSuggestion(r.Context(), lang, key, id, u); err != nil {
 		return err
 	}
-	return redirect(w, r, editorURL(lang, key, r.PostFormValue("filter"), r.PostFormValue("q")), "Dismissed a suggestion.")
+	return redirect(w, r, editorURL(lang, key, r.PostFormValue("filter"), r.PostFormValue("q")), "Deleted a suggestion.")
 }
 
 type activityData struct {

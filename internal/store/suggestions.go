@@ -15,16 +15,20 @@ type Suggestion struct {
 	UserName  string
 	AIModel   string // empty if a person made it
 	CreatedAt string
+	Same      bool // the same as the current, up-to-date translation
 }
 
 type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-// visibleSuggestion is the condition for suggestions g worth showing for
-// source string s and translation t: made for the current source text and
-// not already the current, up-to-date translation.
-const visibleSuggestion = "g.source_hash = s.hash AND NOT coalesce(t.text = g.text AND t.source_hash = s.hash, 0)"
+// sameSuggestion is true when suggestion g for source string s is already
+// translation t, up to date.
+const sameSuggestion = "coalesce(t.text = g.text AND t.source_hash = s.hash, 0)"
+
+// pendingSuggestion is the condition for suggestions g waiting to be picked:
+// made for the current source text and not the same as translation t.
+const pendingSuggestion = "g.source_hash = s.hash AND NOT " + sameSuggestion
 
 // Suggest stores userID's suggestion for a string, replacing their previous one.
 func (s *Store) Suggest(ctx context.Context, lang, key, text string, userID int64) error {
@@ -47,15 +51,17 @@ func suggest(ctx context.Context, x execer, lang, key, text string, userID int64
 	return nil
 }
 
+// suggestions returns the suggestions for a string made for the current
+// source text, those the same as the current translation last.
 func suggestions(ctx context.Context, q querier, lang, key string) ([]Suggestion, error) {
 	rows, err := q.QueryContext(ctx, `
-		SELECT g.id, g.text, g.user_id, u.name, coalesce(u.ai_model, ''), g.created_at
+		SELECT g.id, g.text, g.user_id, u.name, coalesce(u.ai_model, ''), g.created_at, `+sameSuggestion+` AS same
 		FROM suggestions g
 		JOIN source_strings s ON s.key = g.key
 		JOIN users u ON u.id = g.user_id
 		LEFT JOIN translations t ON t.lang = g.lang AND t.key = g.key
-		WHERE g.lang = ? AND g.key = ? AND `+visibleSuggestion+`
-		ORDER BY g.created_at, g.id`, lang, key)
+		WHERE g.lang = ? AND g.key = ? AND g.source_hash = s.hash
+		ORDER BY same, g.created_at, g.id`, lang, key)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +69,7 @@ func suggestions(ctx context.Context, q querier, lang, key string) ([]Suggestion
 	var out []Suggestion
 	for rows.Next() {
 		var g Suggestion
-		if err := rows.Scan(&g.ID, &g.Text, &g.UserID, &g.UserName, &g.AIModel, &g.CreatedAt); err != nil {
+		if err := rows.Scan(&g.ID, &g.Text, &g.UserID, &g.UserName, &g.AIModel, &g.CreatedAt, &g.Same); err != nil {
 			return nil, err
 		}
 		out = append(out, g)
@@ -71,14 +77,14 @@ func suggestions(ctx context.Context, q querier, lang, key string) ([]Suggestion
 	return out, rows.Err()
 }
 
-// suggestionCounts counts the suggestions per key of a language, leaving out
-// approved strings, which nobody needs to look at again.
+// suggestionCounts counts the pending suggestions per key of a language,
+// leaving out approved strings, which nobody needs to look at again.
 func (s *Store) suggestionCounts(ctx context.Context, lang string) (map[string]int, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT g.key, count(*) FROM suggestions g
 		JOIN source_strings s ON s.key = g.key
 		LEFT JOIN translations t ON t.lang = g.lang AND t.key = g.key
-		WHERE g.lang = ? AND t.approved_by IS NULL AND `+visibleSuggestion+`
+		WHERE g.lang = ? AND t.approved_by IS NULL AND `+pendingSuggestion+`
 		GROUP BY g.key`, lang)
 	if err != nil {
 		return nil, err

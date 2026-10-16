@@ -418,8 +418,8 @@ func aiSave(ctx context.Context, tx *sql.Tx, job AISaveJob, key, text string) (A
 		r.Result = AITranslated
 		return r, nil
 	}
-	// A suggestion equal to the current translation is stored too, though not
-	// shown, so the string counts as done for this AI user.
+	// A suggestion equal to the current translation is stored too, so the
+	// string counts as done for this AI user. The editor shows it greyed out.
 	if err := suggest(ctx, tx, job.Lang, key, text, job.AIUserID); err != nil {
 		return r, err
 	}

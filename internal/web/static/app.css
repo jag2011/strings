@@ -323,6 +323,8 @@ textarea[readonly] { color: var(--muted); }
 .suggestions .text { margin: 0; font-size: 16px; }
 .suggestions .muted { margin: 4px 0 0; }
 .suggestions .actions { margin-top: 8px; }
+.suggestions li.same { padding: 8px 16px; opacity: .6; }
+.suggestions li.same .text { font-size: 14px; }
 .tag.suggested { background: var(--tint); color: var(--accent); }
 
 /* Settings */
