@@ -173,7 +173,7 @@ Schema: [`internal/store/schema/001_init.sql`](../internal/store/schema/001_init
 ## AI translation (`internal/ai`)
 
 An admin queues a run on `/admin/ai`: language, AI user, *Missing* or *All*,
-suggestions only or not, style notes, cost limit. One worker goroutine in
+suggestions only or not, cost limit. One worker goroutine in
 `stringsd serve` runs one run at a time, oldest first.
 
 ```
@@ -183,8 +183,8 @@ Runner ──session──▶ go-agent loop ──▶ OpenRouter ──▶ the A
    └─ ai_runs ◀── get_job · next_strings · lookup · save ──▶ store
 ```
 
-- **Tools** are plain Go functions. `get_job` returns the language, mode,
-  style notes and strings left. `next_strings(limit)` returns the next
+- **Tools** are plain Go functions. `get_job` returns the language, mode
+  and strings left. `next_strings(limit)` returns the next
   pending strings as ARB (source, `@key` metadata) plus current translations;
   each string is handed out once per run, so one the model can't get right
   doesn't loop. `lookup(query)` searches existing translations, approved ones
@@ -202,9 +202,16 @@ Runner ──session──▶ go-agent loop ──▶ OpenRouter ──▶ the A
   different AI users can work on the same language.
 - **Sessions.** The model sees the whole conversation on every call, so a
   run is split into sessions of 16 model calls; the next one starts fresh
-  with "continue". The system prompt (ARB/ICU rules, language, style notes,
-  working method) stays the same, and top-level `cache_control` turns on
+  with "continue". The system prompt (ARB/ICU rules, language, working
+  method) stays the same, and top-level `cache_control` turns on
   Anthropic's caching, which other providers do on their own.
+- **The prompt** is editable on `/admin/ai/prompt` and stored in the
+  `ai_prompt` setting; empty means the built-in `ai.DefaultPrompt`, so
+  saving it unchanged or resetting picks up later improvements. Variables
+  in double braces (`{{language}}`, `{{source}}`, `{{code}}`, `{{job}}`)
+  are filled in per run, unknown ones are refused on saving. A run reads
+  the prompt when it starts and keeps the filled-in text in
+  `ai_runs.prompt`, so results can be compared after editing it.
 - **Stopping.** Before every model call the runner checks for cancel, the
   run's cost limit (cost as OpenRouter reports it), a step limit and the
   session size. So a cancel takes effect after the current step, and a run

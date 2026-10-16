@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jag2011/strings/internal/ai"
 	"github.com/jag2011/strings/internal/store"
 )
 
@@ -22,7 +23,6 @@ type aiData struct {
 	UserID  int64
 	Input   string
 	Suggest bool // save everything as suggestions
-	Notes   string
 	MaxCost string
 	Error   string
 }
@@ -46,7 +46,7 @@ func (srv *Server) renderAI(w http.ResponseWriter, r *http.Request, u *store.Use
 		return err
 	}
 	if d.Input == "" {
-		d.Input = store.AIInputMissing
+		d.Input = store.AIInputAll
 	}
 	if d.MaxCost == "" {
 		d.MaxCost = DefaultAICostLimit
@@ -55,13 +55,13 @@ func (srv *Server) renderAI(w http.ResponseWriter, r *http.Request, u *store.Use
 }
 
 func (srv *Server) aiPage(w http.ResponseWriter, r *http.Request, u *store.User) error {
-	return srv.renderAI(w, r, u, http.StatusOK, aiData{})
+	return srv.renderAI(w, r, u, http.StatusOK, aiData{Suggest: true})
 }
 
 // aiTranslate queues a run.
 func (srv *Server) aiTranslate(w http.ResponseWriter, r *http.Request, u *store.User) error {
 	d := aiData{Lang: r.PostFormValue("lang"), Input: r.PostFormValue("input"), Suggest: r.PostFormValue("suggest") == "1",
-		Notes: strings.TrimSpace(r.PostFormValue("notes")), MaxCost: strings.TrimSpace(r.PostFormValue("max_cost"))}
+		MaxCost: strings.TrimSpace(r.PostFormValue("max_cost"))}
 	d.UserID, _ = strconv.ParseInt(r.PostFormValue("user"), 10, 64)
 	fail := func(msg string) error {
 		d.Error = msg
@@ -101,7 +101,7 @@ func (srv *Server) aiTranslate(w http.ResponseWriter, r *http.Request, u *store.
 	}
 
 	run, err := srv.store.CreateAIRun(r.Context(), store.AIRun{Lang: d.Lang, UserID: ai.ID, StartedBy: u.ID, Input: d.Input,
-		Suggest: d.Suggest, Notes: d.Notes, MaxCost: maxCost})
+		Suggest: d.Suggest, MaxCost: maxCost})
 	if err != nil {
 		return err
 	}
@@ -173,4 +173,44 @@ func (srv *Server) aiRestart(w http.ResponseWriter, r *http.Request, u *store.Us
 		return err
 	}
 	return redirect(w, r, fmt.Sprintf("/admin/ai/runs/%d", id), "")
+}
+
+type aiPromptData struct {
+	Prompt  string
+	Default bool // the built-in prompt is used
+	Vars    [][2]string
+	Error   string
+}
+
+func (srv *Server) renderAIPrompt(w http.ResponseWriter, r *http.Request, u *store.User, status int, d aiPromptData) error {
+	d.Vars = ai.PromptVars
+	return srv.render(w, r, status, "aiprompt", u, "AI prompt", d)
+}
+
+func (srv *Server) aiPromptPage(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	set, err := srv.store.Settings(r.Context())
+	if err != nil {
+		return err
+	}
+	d := aiPromptData{Prompt: set["ai_prompt"]}
+	if d.Prompt == "" {
+		d.Prompt, d.Default = ai.DefaultPrompt, true
+	}
+	return srv.renderAIPrompt(w, r, u, http.StatusOK, d)
+}
+
+// aiSavePrompt saves the prompt for the next runs. The built-in prompt is
+// stored as empty, so later versions of it apply.
+func (srv *Server) aiSavePrompt(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	prompt := strings.TrimSpace(strings.ReplaceAll(r.PostFormValue("prompt"), "\r\n", "\n")) + "\n"
+	msg := "Prompt saved. It applies to runs started from now on."
+	if r.PostFormValue("action") == "reset" || prompt == ai.DefaultPrompt {
+		prompt, msg = "", "Using the built-in prompt for runs started from now on."
+	} else if err := ai.CheckPrompt(prompt); err != nil {
+		return srv.renderAIPrompt(w, r, u, http.StatusUnprocessableEntity, aiPromptData{Prompt: prompt, Error: err.Error() + "."})
+	}
+	if err := srv.store.SetSettings(r.Context(), map[string]string{"ai_prompt": prompt}); err != nil {
+		return err
+	}
+	return redirect(w, r, "/admin/ai/prompt", msg)
 }

@@ -139,8 +139,15 @@ func (r *Runner) loop(ctx context.Context) {
 // do runs one run and records how it ended.
 func (r *Runner) do(ctx context.Context, run *store.AIRun) {
 	j := &job{run: run, st: r.store, langName: r.LangName(run.Lang), offered: map[string]bool{}, failed: map[string]bool{}}
+	j.prompt = DefaultPrompt
 	if set, err := r.store.Settings(ctx); err == nil {
 		j.sourceName = r.LangName(set["source_lang"])
+		if p := set["ai_prompt"]; p != "" {
+			j.prompt = p
+		}
+	}
+	if err := r.store.SetAIRunPrompt(ctx, run.ID, systemPrompt(j)); err != nil {
+		log.Printf("ai: run %d: %v", run.ID, err)
 	}
 	j.log = func(ctx context.Context, format string, args ...any) {
 		// Logged even while shutting down, so the log shows the last steps.

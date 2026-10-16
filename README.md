@@ -171,9 +171,14 @@ OPENROUTER_API_KEY=sk-or-…
    `anthropic/claude-opus-5.5` or `openai/gpt-5.5`. The model field offers
    OpenRouter's current models that can call tools, with their prices
    (loaded from its public model list, refreshed every 6 hours).
-2. Under *AI*, pick a language, the AI user, *Missing* or *All* strings,
-   optional style notes and a cost limit, and press *Translate*. The run
-   starts in the background; its page shows progress, cost and a log.
+2. Under *AI → Jobs*, pick a language, the AI user, *Missing* or *All*
+   strings and a cost limit, and press *Translate*. The run starts in the
+   background; its page shows progress, cost and a log.
+
+The instructions for the model are under *AI → Prompt*: a built-in prompt
+with the ARB/ICU rules and how to work, which you can edit, e.g. to describe
+your app or its tone. `{{language}}`, `{{source}}`, `{{code}}` and `{{job}}`
+are filled in per run, and each run keeps the prompt it ran with.
 
 What a run may do is enforced when it saves, whatever the model asks:
 missing strings get the AI user's translation (or a suggestion, with *Save as

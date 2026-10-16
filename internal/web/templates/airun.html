@@ -1,6 +1,6 @@
 {{define "content"}}
 {{$r := .Data.Run}}
-<p class="crumbs"><a href="{{base}}/admin/ai">AI translation</a></p>
+{{template "aiNav" "jobs"}}
 <h1>Run #{{$r.ID}} {{template "runStatus" $r}}</h1>
 {{with $r.Error}}<p class="{{if eq $r.Status "failed"}}error{{else}}note outdated{{end}}" role="alert">{{.}}</p>{{end}}
 
@@ -10,6 +10,7 @@
     <dt>AI user</dt><dd><a href="{{base}}/u/{{$r.UserID}}">{{$r.UserName}}</a> · <span class="mono">{{$r.Model}}</span></dd>
     <dt>Strings</dt><dd>{{if eq $r.Input "all"}}All but approved{{else}}Missing{{end}}, {{if $r.Suggest}}as suggestions{{else}}missing ones as translations{{end}}</dd>
     {{with $r.Notes}}<dt>Style notes</dt><dd class="text">{{.}}</dd>{{end}}
+    {{with $r.Prompt}}<dt>Prompt</dt><dd><details><summary>Show the system prompt</summary><pre class="prompt">{{.}}</pre></details></dd>{{end}}
     <dt>Saved</dt><dd>{{$r.Translated}} translated · {{$r.Suggested}} suggested{{if $r.Failed}} · <span class="error-text">{{$r.Failed}} failed</span>{{end}}</dd>
     <dt>Cost</dt><dd>{{usd $r.Cost}} of {{usd $r.MaxCost}} · {{$r.Steps}} model {{plural $r.Steps "call" "calls"}} · {{tokens $r.InputTokens}} tokens in ({{tokens $r.CachedTokens}} cached), {{tokens $r.OutputTokens}} out</dd>
     <dt>Queued</dt><dd>{{date $r.CreatedAt}}{{with $r.StartedByName}} by {{.}}{{end}}{{with $r.FinishedAt}} · finished {{date .}}{{end}}</dd>

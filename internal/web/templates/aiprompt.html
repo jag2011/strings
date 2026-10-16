@@ -1,0 +1,19 @@
+{{define "content"}}
+{{$d := .Data}}
+{{template "aiNav" "prompt"}}
+{{with $d.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
+
+<section class="card">
+  <p class="muted small">The system prompt, sent to the model at the start of every run{{if $d.Default}}; this is the built-in prompt{{end}}. Changes apply to runs started afterwards. These variables are filled in per run:</p>
+  <ul class="vars small">
+    {{range $d.Vars}}<li><code>{{"{{"}}{{index . 0}}{{"}}"}}</code> {{index . 1}}</li>{{end}}
+  </ul>
+  <form method="post" action="{{base}}/admin/ai/prompt">
+    <textarea name="prompt" rows="30" class="prompt" spellcheck="false" aria-label="System prompt" required>{{$d.Prompt}}</textarea>
+    <div class="actions">
+      <button class="primary">Save</button>
+      {{if not $d.Default}}<button name="action" value="reset" data-confirm="Replace your prompt with the built-in one?">Reset to built-in</button>{{end}}
+    </div>
+  </form>
+</section>
+{{end}}

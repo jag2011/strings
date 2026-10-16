@@ -167,6 +167,8 @@ func (srv *Server) Handler() http.Handler {
 	admin("POST /admin/users/ai", srv.adminCreateAIUser)
 	admin("GET /admin/ai", srv.aiPage)
 	admin("POST /admin/ai", srv.aiTranslate)
+	admin("GET /admin/ai/prompt", srv.aiPromptPage)
+	admin("POST /admin/ai/prompt", srv.aiSavePrompt)
 	admin("GET /admin/ai/runs/{id}", srv.aiRun)
 	admin("POST /admin/ai/runs/{id}/cancel", srv.aiCancel)
 	admin("POST /admin/ai/runs/{id}/restart", srv.aiRestart)

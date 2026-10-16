@@ -1,2 +1,10 @@
 {{/* The status of an AI run as a tag. */}}
 {{define "runStatus"}}<span class="tag run-{{.Status}}">{{.Status}}</span>{{end}}
+
+{{/* The AI pages' tabs; the argument is the current one. */}}
+{{define "aiNav"}}
+<nav class="tabs subnav" aria-label="AI translation">
+  <a href="{{base}}/admin/ai" {{if eq . "jobs"}}aria-current="page"{{end}}>Jobs</a>
+  <a href="{{base}}/admin/ai/prompt" {{if eq . "prompt"}}aria-current="page"{{end}}>Prompt</a>
+</nav>
+{{end}}

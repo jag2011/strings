@@ -23,6 +23,7 @@ type job struct {
 	st         *store.Store
 	langName   string
 	sourceName string // the source language
+	prompt     string // the system prompt, before filling in variables
 	// offered holds the keys next_strings returned, so a string the agent
 	// can't get right isn't handed out again and again. A restarted run
 	// starts with an empty set and tries those strings once more.
@@ -68,7 +69,7 @@ func (j *job) tools() []Tool {
 	return []Tool{
 		{
 			Name:        "get_job",
-			Description: "Returns the job: target language, mode, style notes and how many strings are left.",
+			Description: "Returns the job: target language, mode and how many strings are left.",
 			Schema:      object(map[string]any{}),
 			Call: func(ctx context.Context, _ json.RawMessage) (any, error) {
 				left, err := j.left(ctx)
@@ -78,7 +79,6 @@ func (j *job) tools() []Tool {
 				return map[string]any{
 					"language":     fmt.Sprintf("%s (%s)", j.langName, j.run.Lang),
 					"mode":         j.mode(),
-					"style_notes":  j.run.Notes,
 					"strings_left": len(left),
 				}, nil
 			},

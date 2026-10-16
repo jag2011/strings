@@ -203,7 +203,7 @@ func TestRunTranslatesMissing(t *testing.T) {
 	e := setup(t, translateAll(2, german))
 	e.st.Save(e.ctx, "de", "c", "Kirsche", e.p, -1, store.KeepApproval)
 	e.start()
-	r := e.wait(e.queue(store.AIRun{Notes: "informal du"}).ID)
+	r := e.wait(e.queue(store.AIRun{}).ID)
 	if r.Status != store.AIDone || r.Translated != 4 || r.Suggested != 0 || r.Failed != 0 || r.Summary != "Translated everything." || r.Error != "" {
 		t.Fatalf("run: %+v", r)
 	}
@@ -224,8 +224,34 @@ func TestRunTranslatesMissing(t *testing.T) {
 		}
 	}
 	s := e.fa.sessions[0]
-	if s.Model != "anthropic/claude-opus-5.5" || !strings.Contains(s.System, "into de (de)") || !strings.Contains(s.System, "informal du") {
+	if s.Model != "anthropic/claude-opus-5.5" || !strings.Contains(s.System, "from en into de (de)") || strings.Contains(s.System, "{{") {
 		t.Errorf("session: %s\n%s", s.Model, s.System)
+	}
+	if r.Prompt != s.System {
+		t.Errorf("prompt not recorded: %q", r.Prompt)
+	}
+}
+
+func TestCustomPrompt(t *testing.T) {
+	e := setup(t, translateAll(10, german))
+	e.st.SetSettings(e.ctx, map[string]string{"ai_prompt": "Translate into {{language}} ({{ code }}), a game. {{job}} {{unknown}}"})
+	e.start()
+	r := e.wait(e.queue(store.AIRun{Suggest: true}).ID)
+	want := "Translate into de (de), a game. Translate the strings that have no translation yet. Everything you save becomes a suggestion for a person to review. {{unknown}}"
+	if s := e.fa.sessions[0].System; s != want || r.Prompt != want {
+		t.Errorf("system prompt: %q", s)
+	}
+}
+
+func TestCheckPrompt(t *testing.T) {
+	if err := CheckPrompt(DefaultPrompt); err != nil {
+		t.Errorf("default: %v", err)
+	}
+	if err := CheckPrompt("Into {{language}}, {{lang}} and {{ lang }} {{x}}"); err == nil || err.Error() != "unknown variables {{lang}}, {{ lang }}, {{x}}" {
+		t.Errorf("unknown: %v", err)
+	}
+	if err := CheckPrompt(" \n"); err == nil {
+		t.Error("empty prompt passed")
 	}
 }
 

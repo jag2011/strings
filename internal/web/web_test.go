@@ -849,7 +849,7 @@ func TestAIPage(t *testing.T) {
 	opus, _ := e.store.CreateAIUser(ctx, "Claude Opus", "anthropic/claude-opus-5.5")
 	e.store.Save(ctx, "de", "bye", "Tschüss", 1, -1, store.KeepApproval) // by admin
 	_, body := e.get(admin, "/admin/ai")
-	for _, want := range []string{"German (de) · 2 missing", "Claude Opus · anthropic/claude-opus-5.5", `value="missing" checked`, `name="max_cost"`, `value="5"`} {
+	for _, want := range []string{"German (de) · 2 missing", "Claude Opus · anthropic/claude-opus-5.5", `value="all" checked`, `name="suggest" value="1" checked`, `name="max_cost"`, `value="5"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("form misses %q", want)
 		}
@@ -860,7 +860,7 @@ func TestAIPage(t *testing.T) {
 		v    url.Values
 		want string
 	}{
-		{url.Values{"input": {"missing"}, "notes": {"informal du"}}, "queued by admin: 2 strings into German, as translations"},
+		{url.Values{"input": {"missing"}}, "queued by admin: 2 strings into German, as translations"},
 		{url.Values{"input": {"all"}}, "3 strings into German: 2 missing as translations, 1 already translated as suggestions"},
 		{url.Values{"input": {"all"}, "suggest": {"1"}}, "3 strings into German, all as suggestions"},
 	} {
@@ -876,7 +876,7 @@ func TestAIPage(t *testing.T) {
 			t.Errorf("run %d misses %q", i+1, c.want)
 		}
 	}
-	if r, _ := e.store.AIRun(ctx, 1); r.Status != store.AIQueued || r.Notes != "informal du" || r.MaxCost != 2.5 || r.Model != "anthropic/claude-opus-5.5" {
+	if r, _ := e.store.AIRun(ctx, 1); r.Status != store.AIQueued || r.MaxCost != 2.5 || r.Model != "anthropic/claude-opus-5.5" {
 		t.Errorf("run 1: %+v", r)
 	}
 	for _, v := range []url.Values{
@@ -905,5 +905,50 @@ func TestAIPage(t *testing.T) {
 	}
 	if res, _ := e.get(admin, "/admin/ai/runs/99"); res.StatusCode != http.StatusNotFound {
 		t.Errorf("unknown run: %d", res.StatusCode)
+	}
+}
+
+func TestAIPromptPage(t *testing.T) {
+	e := setup(t)
+	admin := e.user("admin@example.com", "admin")
+	tr := e.user("tr@example.com", "translator")
+	if res, _ := e.get(tr, "/admin/ai/prompt"); res.StatusCode != http.StatusForbidden {
+		t.Errorf("translator: %d", res.StatusCode)
+	}
+	_, body := e.get(admin, "/admin/ai/prompt")
+	for _, want := range []string{"this is the built-in prompt", "into {{language}} ({{code}})", "<code>{{job}}</code>", `aria-current="page">Prompt</a>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page misses %q", want)
+		}
+	}
+	if strings.Contains(body, "Reset to built-in") {
+		t.Error("reset offered for the built-in prompt")
+	}
+	setting := func() string {
+		set, _ := e.store.Settings(context.Background())
+		return set["ai_prompt"]
+	}
+
+	if res := e.post(admin, "/admin/ai/prompt", url.Values{"prompt": {"Into {{language}}.\r\nBe brief."}}); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("save: %d", res.StatusCode)
+	}
+	if got := setting(); got != "Into {{language}}.\nBe brief.\n" {
+		t.Errorf("saved %q", got)
+	}
+	if _, body := e.get(admin, "/admin/ai/prompt"); !strings.Contains(body, "Be brief.") || !strings.Contains(body, "Reset to built-in") {
+		t.Error("saved prompt not shown")
+	}
+	if res := e.post(admin, "/admin/ai/prompt", url.Values{"prompt": {"Into {{lang}}."}}); res.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("unknown variable: %d", res.StatusCode)
+	}
+	// The built-in prompt, saved unchanged or by reset, is stored as empty.
+	e.post(admin, "/admin/ai/prompt", url.Values{"prompt": {ai.DefaultPrompt}})
+	if got := setting(); got != "" {
+		t.Errorf("default saved as %q", got)
+	}
+	e.post(admin, "/admin/ai/prompt", url.Values{"prompt": {"Mine {{job}}"}})
+	e.post(admin, "/admin/ai/prompt", url.Values{"prompt": {"Mine {{job}}"}, "action": {"reset"}})
+	if got := setting(); got != "" {
+		t.Errorf("after reset %q", got)
 	}
 }

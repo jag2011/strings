@@ -39,7 +39,7 @@ type AIRun struct {
 	Model         string
 	Input         string
 	Suggest       bool
-	Notes         string
+	Notes         string // style notes; no longer asked for, kept for old runs
 	MaxCost       float64
 	Status        string
 	Translated    int
@@ -52,6 +52,7 @@ type AIRun struct {
 	Cost          float64
 	Summary       string
 	Error         string
+	Prompt        string // the system prompt of the last start, filled in
 	CreatedAt     string
 	StartedAt     string
 	FinishedAt    string
@@ -68,14 +69,14 @@ func (r *AIRun) CanRestart() bool {
 const aiRunSelect = `
 	SELECT r.id, r.lang, r.user_id, u.name, coalesce(r.started_by, 0), coalesce(b.name, ''), r.model, r.input, r.suggest, r.notes,
 		r.max_cost, r.status, r.translated, r.suggested, r.failed, r.steps, r.input_tokens, r.cached_tokens, r.output_tokens,
-		r.cost, r.summary, r.error, r.created_at, coalesce(r.started_at, ''), coalesce(r.finished_at, '')
+		r.cost, r.summary, r.error, r.prompt, r.created_at, coalesce(r.started_at, ''), coalesce(r.finished_at, '')
 	FROM ai_runs r JOIN users u ON u.id = r.user_id LEFT JOIN users b ON b.id = r.started_by`
 
 func scanAIRun(row interface{ Scan(...any) error }) (*AIRun, error) {
 	r := &AIRun{}
 	err := row.Scan(&r.ID, &r.Lang, &r.UserID, &r.UserName, &r.StartedBy, &r.StartedByName, &r.Model, &r.Input, &r.Suggest, &r.Notes,
 		&r.MaxCost, &r.Status, &r.Translated, &r.Suggested, &r.Failed, &r.Steps, &r.InputTokens, &r.CachedTokens, &r.OutputTokens,
-		&r.Cost, &r.Summary, &r.Error, &r.CreatedAt, &r.StartedAt, &r.FinishedAt)
+		&r.Cost, &r.Summary, &r.Error, &r.Prompt, &r.CreatedAt, &r.StartedAt, &r.FinishedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -140,6 +141,12 @@ func (s *Store) StartNextAIRun(ctx context.Context) (*AIRun, error) {
 		return nil, err
 	}
 	return s.AIRun(ctx, id)
+}
+
+// SetAIRunPrompt records the system prompt a run works with.
+func (s *Store) SetAIRunPrompt(ctx context.Context, id int64, prompt string) error {
+	_, err := s.w.ExecContext(ctx, "UPDATE ai_runs SET prompt = ? WHERE id = ?", prompt, id)
+	return err
 }
 
 // FinishAIRun ends a running run with one of the finished states.

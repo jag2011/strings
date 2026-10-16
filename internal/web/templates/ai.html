@@ -1,10 +1,10 @@
 {{define "content"}}
 {{$d := .Data}}
-<h1>AI translation</h1>
+{{template "aiNav" "jobs"}}
+<h1>Create Job</h1>
 {{with $d.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
 
 <section class="card">
-  <h2>Translate</h2>
   {{if not $d.Enabled}}
   <p class="note outdated">AI translation needs an OpenRouter API key. Set <code>OPENROUTER_API_KEY</code> in the server's environment (<code>/etc/strings/strings.env</code> in production) and restart it.</p>
   {{end}}
@@ -38,9 +38,6 @@
         <p class="hint muted small">Otherwise missing strings get the translation directly. Existing translations are never replaced; they get suggestions.</p>
       </div>
     </fieldset>
-    <label class="span">Style notes
-      <textarea name="notes" rows="2" placeholder="Optional, e.g. informal “du”, keep game terms in English">{{$d.Notes}}</textarea>
-    </label>
     <label>Cost limit in USD
       <input name="max_cost" type="number" min="0.01" max="1000" step="0.01" value="{{$d.MaxCost}}" required>
     </label>

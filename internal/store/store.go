@@ -154,6 +154,7 @@ var defaults = map[string]string{
 	"arb_locale":           "0", // write "@@locale" into exports
 	"arb_trailing_newline": "0",
 	"source_revision":      "0", // counts source imports that changed something
+	"ai_prompt":            "",  // the AI system prompt; empty for the built-in one
 }
 
 func (s *Store) Settings(ctx context.Context) (map[string]string, error) {
