@@ -187,6 +187,10 @@ func (s *Store) ImportSource(ctx context.Context, f *arb.File, decide map[string
 					_, err = tx.ExecContext(ctx, "UPDATE translations SET approved_by = NULL, approved_at = NULL WHERE key = ?", c.Key)
 				}
 			}
+			if err == nil && decide[c.Key] != KeepTranslations {
+				// Suggestions were made for the old source text.
+				_, err = tx.ExecContext(ctx, "DELETE FROM suggestions WHERE key = ?", c.Key)
+			}
 			if err != nil {
 				return err
 			}

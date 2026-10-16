@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jag2011/strings/internal/arb"
@@ -228,6 +229,12 @@ func TestSourceDecisions(t *testing.T) {
 	s, ctx := open(t), context.Background()
 	s.ImportSource(ctx, parse(t, `{"a": "Teh cat", "b": "Dog", "c": "Bird", "d": "Fish"}`), nil)
 	s.ImportTranslations(ctx, "de", parse(t, `{"a": "Die Katze", "b": "Hund", "c": "Vogel"}`))
+	ai, _ := s.CreateAIUser(ctx, "Claude Opus", "anthropic/claude-opus-5.5")
+	for k, text := range map[string]string{"a": "Eine Katze", "b": "Der Hund", "c": "Ein Vogel", "d": "Fische"} {
+		if err := s.Suggest(ctx, "de", k, text, ai.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	f := parse(t, `{"a": "The cat", "b": "Wolf", "c": "Eagle", "d": "Fish", "e": "New"}`)
 	d, err := s.PreviewSource(ctx, f)
@@ -256,6 +263,18 @@ func TestSourceDecisions(t *testing.T) {
 	}
 	if e := entry(t, s, "de", "c"); e.Has || len(e.History) != 1 {
 		t.Errorf("c removed, history kept: %+v", e)
+	}
+	// Suggestions go with outdated and removed translations.
+	var left []string
+	rows, _ := s.r.QueryContext(ctx, "SELECT key FROM suggestions ORDER BY key")
+	for rows.Next() {
+		var k string
+		rows.Scan(&k)
+		left = append(left, k)
+	}
+	rows.Close()
+	if strings.Join(left, ",") != "a,d" {
+		t.Errorf("suggestions left: %v", left)
 	}
 
 	// The same file again changes nothing and keeps the revision.
