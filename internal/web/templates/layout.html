@@ -25,7 +25,13 @@
     {{end}}
   </nav>
   <form method="post" action="{{base}}/logout"><button class="link" title="Log out {{.Email}}">{{template "icon" "logout"}}Log out</button></form>
-  {{end}}
+  {{else}}{{if .Public}}
+  <nav>
+    <a href="{{base}}/" {{if eq $.Nav "home"}}aria-current="page"{{end}}>{{template "icon" "languages"}}Languages</a>
+    <a href="{{base}}/activity" {{if eq $.Nav "activity"}}aria-current="page"{{end}}>{{template "icon" "activity"}}Activity</a>
+  </nav>
+  {{if ne .Nav "login"}}<a class="login" href="{{base}}/login">Log in</a>{{end}}
+  {{end}}{{end}}
 </header>
 <main>
 {{with .Flash}}<p class="flash" role="status">{{.}}</p>{{end}}

@@ -25,6 +25,19 @@
   {{if $e.Outdated}}<p class="note outdated">The source text changed on {{date $e.SourceSince}}. Check that the translation still fits, then save it, even unchanged.</p>{{end}}
 </section>
 
+{{if not .User}}
+<section class="editor">
+  {{if $e.Approved}}<p class="note approved"><span class="approved" aria-hidden="true">✓</span> Approved by <a href="{{base}}/u/{{$e.ApprovedByID}}">{{$e.ApprovedBy}}</a> · {{date $e.ApprovedAt}}.</p>{{end}}
+  <h2 class="label">{{langName $d.Lang}}
+    {{if $e.Has}}<span class="muted small">· {{$e.Origin}}{{if $e.UserID}} by <a href="{{base}}/u/{{$e.UserID}}">{{$e.UserName}}</a>{{end}} · {{date $e.UpdatedAt}}</span>{{end}}
+  </h2>
+  {{if $e.Has}}<p class="text card" lang="{{bcp47 $d.Lang}}" dir="{{dir $d.Lang}}">{{$e.Text}}</p>{{else}}<p><span class="tag missing">missing</span></p>{{end}}
+  <div class="actions">
+    {{with $d.NextKey}}<a class="button" href="{{base}}/t/{{$d.Lang}}/{{esc .}}{{query "filter" $d.Filter "q" $d.Q}}">Next →</a>{{end}}
+    <a href="{{base}}/login?next={{print "/t/" $d.Lang "/" (esc $e.Key)}}">Log in to translate</a>
+  </div>
+</section>
+{{else}}
 <form method="post" class="editor" data-editor>
   <input type="hidden" name="base" value="{{$d.Base}}">
   <input type="hidden" name="filter" value="{{$d.Filter}}">
@@ -70,6 +83,7 @@
   </div>
   <p class="muted small hint" hidden data-hint><kbd>Ctrl</kbd>+<kbd>Enter</kbd> saves and opens the next string.</p>
 </form>
+{{end}}
 
 {{with $e.Suggestions}}
 <details class="suggestions" {{if not $e.Approved}}open{{end}}>
@@ -81,7 +95,7 @@
       <p class="muted small">
         <a href="{{base}}/u/{{.UserID}}">{{.UserName}}</a>{{if .AIModel}} <span class="tag" title="{{.AIModel}}">AI</span>{{end}} · {{date .CreatedAt}}{{if .Same}} · same as the current translation{{end}}
       </p>
-      {{if or (and .Same $canApprove) (and (not .Same) (or $canApprove (not $e.Approved)))}}
+      {{if and $.User (or (and .Same $canApprove) (and (not .Same) (or $canApprove (not $e.Approved))))}}
       <form method="post" class="actions">
         <input type="hidden" name="base" value="{{$e.HistoryID}}">
         <input type="hidden" name="filter" value="{{$d.Filter}}">
@@ -111,6 +125,7 @@
         {{if .ForOldText}}· for an older source text{{end}}
         {{if .Current}}· <strong>current</strong>{{end}}
       </p>
+      {{if $.User}}
       {{$restore := not (or .Current $e.Approved)}}
       {{$delete := and (or (eq .UserID $.User.ID) $.User.CanApprove) (or (not .Current) (not $e.Approved) $.User.CanApprove)}}
       {{if or $restore $delete}}
@@ -130,6 +145,7 @@
         </form>
         {{end}}
       </div>
+      {{end}}
       {{end}}
     </li>
   {{end}}

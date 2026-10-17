@@ -34,6 +34,9 @@ type Server struct {
 	// Base is the path the app is served under, like "/strings", or "" for
 	// the root. See underBase.
 	Base string
+	// Public lets visitors who aren't logged in browse the languages,
+	// strings, activity and profiles, without editing anything.
+	Public bool
 
 	// AI runs AI translation jobs; nil without an OpenRouter key.
 	AI *ai.Runner
@@ -122,11 +125,14 @@ func New(s *store.Store, external *External) (*Server, error) {
 
 func (srv *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	view := func(pattern string, h func(http.ResponseWriter, *http.Request, *store.User) error) {
+		mux.Handle(pattern, srv.page(h, viewer))
+	}
 	page := func(pattern string, h func(http.ResponseWriter, *http.Request, *store.User) error) {
-		mux.Handle(pattern, srv.page(h, false))
+		mux.Handle(pattern, srv.page(h, member))
 	}
 	admin := func(pattern string, h func(http.ResponseWriter, *http.Request, *store.User) error) {
-		mux.Handle(pattern, srv.page(h, true))
+		mux.Handle(pattern, srv.page(h, adminOnly))
 	}
 
 	static, _ := fs.Sub(staticFS, "static")
@@ -141,12 +147,14 @@ func (srv *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /auth/app", srv.externalPage)
 	mux.HandleFunc("POST /auth/app", srv.externalSignIn)
 
-	page("GET /{$}", srv.home)
+	// Handlers registered with view get a nil user for visitors when
+	// srv.Public is set.
+	view("GET /{$}", srv.home)
 	page("GET /account", srv.account)
-	page("GET /u/{id}", srv.profile)
-	page("GET /activity", srv.activity)
-	page("GET /t/{lang}", srv.list)
-	page("GET /t/{lang}/{key}", srv.editor)
+	view("GET /u/{id}", srv.profile)
+	view("GET /activity", srv.activity)
+	view("GET /t/{lang}", srv.list)
+	view("GET /t/{lang}/{key}", srv.editor)
 	page("POST /t/{lang}/{key}", srv.save)
 	page("POST /t/{lang}/{key}/revert/{id}", srv.revert)
 	page("POST /t/{lang}/{key}/delete/{id}", srv.deleteVersion)
@@ -284,6 +292,7 @@ type pageCtx struct {
 	Settings map[string]string
 	Flash    string
 	Nav      string
+	Public   bool // visitors can browse without logging in
 	Data     any
 }
 
@@ -292,7 +301,7 @@ func (srv *Server) render(w http.ResponseWriter, r *http.Request, status int, na
 	if err != nil {
 		return err
 	}
-	ctx := pageCtx{Title: title, User: u, Settings: set, Flash: takeFlash(w, r), Data: data, Nav: name}
+	ctx := pageCtx{Title: title, User: u, Settings: set, Flash: takeFlash(w, r), Data: data, Nav: name, Public: srv.Public}
 	var buf strings.Builder
 	if err := srv.pages[name].ExecuteTemplate(&buf, "layout.html", ctx); err != nil {
 		return err
@@ -314,15 +323,25 @@ func (e httpError) Error() string { return e.msg }
 func notFound() error             { return httpError{http.StatusNotFound, "Not found."} }
 func badRequest(msg string) error { return httpError{http.StatusBadRequest, msg} }
 
-// page wraps handlers that need a logged-in user, and renders errors.
-func (srv *Server) page(h func(http.ResponseWriter, *http.Request, *store.User) error, adminOnly bool) http.Handler {
+// access says who may open a page.
+type access int
+
+const (
+	viewer    access = iota // anyone with Server.Public, else logged-in users
+	member                  // logged-in users
+	adminOnly               // admins
+)
+
+// page wraps handlers, checks access and renders errors. The user is nil
+// only for visitors on viewer pages.
+func (srv *Server) page(h func(http.ResponseWriter, *http.Request, *store.User) error, level access) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u := srv.currentUser(r)
-		if u == nil {
+		if u == nil && !(level == viewer && srv.Public) {
 			http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
 			return
 		}
-		if adminOnly && !u.IsAdmin() {
+		if level == adminOnly && !u.IsAdmin() {
 			srv.renderError(w, r, u, httpError{http.StatusForbidden, "Only admins can open this page."})
 			return
 		}

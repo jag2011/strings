@@ -81,7 +81,7 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 .top nav { display: flex; gap: 4px 14px; flex-wrap: wrap; align-items: center; }
 .top nav a { color: var(--muted); }
 .top nav a[aria-current] { color: var(--text); font-weight: 600; }
-.top > form { justify-self: end; margin: 0 0 0 16px; }
+.top > form, .top > .login { justify-self: end; margin: 0 0 0 16px; }
 .top nav a, .top button.link { display: inline-flex; align-items: center; gap: 5px; }
 @media (max-width: 640px) {
   .top { grid-template-columns: 1fr auto; row-gap: 8px; }

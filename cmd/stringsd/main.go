@@ -24,7 +24,7 @@ import (
 const usage = `stringsd: the strings server, minimalistic string management
 
 Usage:
-  stringsd serve  [-db strings.db] [-addr :8080] [-base /strings] [-trust-proxy]
+  stringsd serve  [-db strings.db] [-addr :8080] [-base /strings] [-trust-proxy] [-public]
   stringsd user   [-db strings.db] [-admin | -proofreader] [-url http://localhost:8080] <email> <name>
   stringsd import [-db strings.db] <file.arb>...
   stringsd export [-db strings.db] [-out .]
@@ -35,7 +35,8 @@ The database path can also be set with STRINGS_DB, the listen address with
 STRINGS_ADDR. -base (or STRINGS_BASE) serves the app under a path, like
 /strings, instead of the root. Behind a load balancer that appends
 X-Forwarded-For, set -trust-proxy (or STRINGS_TRUST_PROXY=1) so login limits
-apply per client.
+apply per client. -public (or STRINGS_PUBLIC=1) lets visitors browse the
+strings, activity and profiles without logging in; editing still needs a login.
 
 Sign-in links from an external account server (see README) are enabled with
 STRINGS_AUTH_URL (the code exchange endpoint), STRINGS_AUTH_SECRET and
@@ -61,6 +62,7 @@ func main() {
 		addr := fs.String("addr", envOr("STRINGS_ADDR", ":8080"), "listen address")
 		base := fs.String("base", os.Getenv("STRINGS_BASE"), "path to serve under, like /strings")
 		trustProxy := fs.Bool("trust-proxy", os.Getenv("STRINGS_TRUST_PROXY") == "1", "take the client IP from X-Forwarded-For")
+		public := fs.Bool("public", os.Getenv("STRINGS_PUBLIC") == "1", "let visitors browse without logging in")
 		fs.Parse(args)
 		*base = strings.TrimSuffix(*base, "/")
 		if *base != "" && (!strings.HasPrefix(*base, "/") || strings.Contains(*base, "//")) {
@@ -69,7 +71,7 @@ func main() {
 		var ext *web.External
 		ext, err = externalFromEnv()
 		if err == nil {
-			err = serve(*dbPath, *addr, *base, ext, *trustProxy)
+			err = serve(*dbPath, *addr, *base, ext, *trustProxy, *public)
 		}
 	case "user":
 		admin := fs.Bool("admin", false, "make the user an admin")
@@ -157,7 +159,7 @@ func externalFromEnv() (*web.External, error) {
 	return x, nil
 }
 
-func serve(dbPath, addr, base string, ext *web.External, trustProxy bool) error {
+func serve(dbPath, addr, base string, ext *web.External, trustProxy, public bool) error {
 	return withStore(dbPath, func(s *store.Store) error {
 		srv, err := web.New(s, ext)
 		if err != nil {
@@ -165,6 +167,7 @@ func serve(dbPath, addr, base string, ext *web.External, trustProxy bool) error 
 		}
 		srv.TrustProxy = trustProxy
 		srv.Base = base
+		srv.Public = public
 		srv.Models = ai.NewCatalog()
 		hs := &http.Server{
 			Addr:              addr,
@@ -201,6 +204,9 @@ func serve(dbPath, addr, base string, ext *web.External, trustProxy bool) error 
 			hs.Shutdown(shut)
 		}()
 		log.Printf("stringsd: serving %s on %s%s", dbPath, addr, base)
+		if public {
+			log.Printf("stringsd: public, visitors can browse without logging in")
+		}
 		if ext != nil {
 			log.Printf("stringsd: sign-in links from %s (%s)", ext.Name, ext.URL)
 		}

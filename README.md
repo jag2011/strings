@@ -1,5 +1,7 @@
 # strings
 
+Demo: https://homequest.app/strings
+
 Minimalistic, self-hosted translation management for ARB files.
 
 Upload your source ARB, let translators work in a clean web interface, download
@@ -203,6 +205,10 @@ suggestions appear side by side in the editor.
   `STRINGS_BASE=/strings`: the proxy forwards `/strings/*` unchanged and links,
   redirects and cookies get the prefix. API clients and sign-in links then
   use `https://example.com/strings` as the base URL.
+- `STRINGS_PUBLIC=1` (or `serve -public`) makes the app viewable without a
+  login: visitors can browse the languages, strings, activity and profiles
+  (without emails), read-only. Editing, admin pages and exports still need a
+  login.
 - `GET /health` returns 200 while the database answers, for load balancer
   health checks. With a base path it is also served at the root.
 - `stringsd backup <out.db>` writes a consistent single-file copy of the

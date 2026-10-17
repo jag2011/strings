@@ -380,7 +380,8 @@ func (srv *Server) profile(w http.ResponseWriter, r *http.Request, u *store.User
 	if err != nil {
 		return err
 	}
-	d := profileData{Profile: p, Own: p.ID == u.ID, ShowEmail: p.ID == u.ID || u.IsAdmin()}
+	own := u != nil && p.ID == u.ID
+	d := profileData{Profile: p, Own: own, ShowEmail: own || u.IsAdmin()}
 	if d.Langs, err = srv.store.UserLanguages(r.Context(), p.ID); err != nil {
 		return err
 	}

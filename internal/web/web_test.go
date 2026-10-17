@@ -192,6 +192,36 @@ func TestLoginRequired(t *testing.T) {
 	}
 }
 
+func TestPublic(t *testing.T) {
+	e := setupWith(t, nil, func(s *Server) { s.Public = true })
+	e.user("tr@example.com", "translator") // id 1
+	e.store.Save(context.Background(), "de", "hello", "Hallo {name}!", 1, -1, store.KeepApproval)
+	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	for _, p := range []string{"/", "/t/de", "/t/de/hello", "/t/de/bye", "/activity", "/u/1"} {
+		res, body := e.get(c, p)
+		if res.StatusCode != 200 {
+			t.Errorf("GET %s: %d\n%s", p, res.StatusCode, body)
+		}
+		if strings.Contains(body, "<form method=\"post\"") || strings.Contains(body, "tr@example.com") {
+			t.Errorf("GET %s shows a form or an email to a visitor", p)
+		}
+	}
+	if _, body := e.get(c, "/t/de/hello"); !strings.Contains(body, "Hallo {name}!") || !strings.Contains(body, "Log in to translate") {
+		t.Errorf("read-only editor:\n%s", body)
+	}
+	for _, p := range []string{"/account", "/admin", "/export/intl_de.arb"} {
+		if res, _ := e.get(c, p); res.StatusCode != http.StatusSeeOther {
+			t.Errorf("GET %s: %d, want a redirect to log in", p, res.StatusCode)
+		}
+	}
+	if res := e.post(c, "/t/de/hello", url.Values{"text": {"Hi {name}!"}, "base": {"-1"}}); res.StatusCode != http.StatusSeeOther {
+		t.Errorf("visitor save: %d", res.StatusCode)
+	}
+	if en, _ := e.store.Entry(context.Background(), "de", "hello"); en.Text != "Hallo {name}!" {
+		t.Errorf("visitor changed the text to %q", en.Text)
+	}
+}
+
 func TestTranslateFlow(t *testing.T) {
 	e := setup(t)
 	c := e.user("tr@example.com", "translator")

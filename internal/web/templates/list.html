@@ -18,7 +18,7 @@
 
 <div data-results>
 <p class="muted small">{{$d.Count}} {{plural $d.Count "string" "strings"}}{{if gt $d.Pages 1}} · page {{$d.Page}} of {{$d.Pages}}{{end}}
-{{if $d.Rows}}{{with index $d.Rows 0}} · <a href="{{base}}/t/{{$d.Lang}}/{{esc .Key}}{{query "filter" $d.Filter "q" $d.Q}}">Start translating →</a>{{end}}{{end}}</p>
+{{if $d.Rows}}{{with index $d.Rows 0}} · <a href="{{base}}/t/{{$d.Lang}}/{{esc .Key}}{{query "filter" $d.Filter "q" $d.Q}}">{{if $.User}}Start translating{{else}}Open the first string{{end}} →</a>{{end}}{{end}}</p>
 
 {{if not $d.Rows}}
   <p class="empty">{{if eq $d.Filter "todo"}}All done here. Nothing missing or outdated.{{else if eq $d.Filter "unapproved"}}Nothing waiting for approval.{{else}}No strings match.{{end}}</p>

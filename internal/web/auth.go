@@ -116,7 +116,11 @@ func (srv *Server) logout(w http.ResponseWriter, r *http.Request) {
 		srv.store.DeleteSession(r.Context(), c.Value)
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", MaxAge: -1})
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
+	to := "/login"
+	if srv.Public {
+		to = "/"
+	}
+	http.Redirect(w, r, to, http.StatusSeeOther)
 }
 
 type inviteData struct {
