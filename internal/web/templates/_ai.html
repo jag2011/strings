@@ -5,6 +5,7 @@
 {{define "aiNav"}}
 <nav class="tabs subnav" aria-label="AI translation">
   <a href="{{base}}/admin/ai" {{if eq . "jobs"}}aria-current="page"{{end}}>Jobs</a>
+  <a href="{{base}}/admin/ai/fill" {{if eq . "fill"}}aria-current="page"{{end}}>Fill</a>
   <a href="{{base}}/admin/ai/prompt" {{if eq . "prompt"}}aria-current="page"{{end}}>Prompt</a>
 </nav>
 {{end}}

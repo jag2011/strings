@@ -370,8 +370,49 @@ func TestStopsWhenModelGivesUp(t *testing.T) {
 	})
 	e.start()
 	r := e.wait(e.queue(store.AIRun{}).ID)
-	if r.Status != store.AIDone || r.Summary != "I can't do this." || e.fa.count() != 1 {
+	if r.Status != store.AIDone || r.Summary != "I can't do this." || e.fa.count() != 3 {
 		t.Fatalf("run: %+v, %d sessions", r, e.fa.count())
+	}
+	if log := e.events(r.ID); strings.Count(log, "stopped without saving anything; starting a fresh session") != 2 {
+		t.Errorf("log:\n%s", log)
+	}
+}
+
+// A session that ends early without saving, as when the model's save call
+// is lost, doesn't end the run, and its batch is handed out again.
+func TestRetriesAfterEmptySession(t *testing.T) {
+	e := setup(t, nil)
+	e.fa.script = func(c *caller) (string, error) {
+		if e.fa.count() == 1 {
+			c.step()
+			c.call("get_job", struct{}{})
+			c.step()
+			c.call("next_strings", map[string]int{"limit": 40})
+			c.s.Log(c.ctx, "the model answered without a usable tool call: completed, no output")
+			c.step()
+			return "", nil
+		}
+		return translateAll(40, german)(c)
+	}
+	e.start()
+	r := e.wait(e.queue(store.AIRun{}).ID)
+	if r.Status != store.AIDone || r.Translated != 5 || e.fa.count() != 2 {
+		t.Fatalf("run: %+v, %d sessions", r, e.fa.count())
+	}
+	if log := e.events(r.ID); !strings.Contains(log, "without a usable tool call") || !strings.Contains(log, "0 strings still to do") {
+		t.Errorf("log:\n%s", log)
+	}
+}
+
+// A session that ends after next_strings, before saving, doesn't lose the
+// batch: the next session gets it again.
+func TestSessionEndKeepsBatch(t *testing.T) {
+	e := setup(t, translateAll(1, german))
+	e.r.SessionSteps = 4 // get_job, next_strings, save, next_strings
+	e.start()
+	r := e.wait(e.queue(store.AIRun{}).ID)
+	if r.Status != store.AIDone || r.Translated != 5 {
+		t.Fatalf("run: %+v", r)
 	}
 }
 

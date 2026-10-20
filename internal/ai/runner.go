@@ -30,6 +30,10 @@ type Runner struct {
 	// MaxSteps stops a run after that many model calls in one go, in case
 	// the cost isn't reported.
 	MaxSteps int
+	// MaxIdleSessions ends a run after that many sessions in a row saved
+	// nothing. Models sometimes end a session early, e.g. with a tool call
+	// whose arguments aren't valid JSON, so one such session isn't the end.
+	MaxIdleSessions int
 
 	store *store.Store
 	agent Agent
@@ -43,13 +47,14 @@ type Runner struct {
 
 func NewRunner(s *store.Store, a Agent) *Runner {
 	return &Runner{
-		LangName:     func(code string) string { return code },
-		SessionSteps: 16,
-		MaxSteps:     400,
-		store:        s,
-		agent:        a,
-		wake:         make(chan struct{}, 1),
-		done:         make(chan struct{}),
+		LangName:        func(code string) string { return code },
+		SessionSteps:    16,
+		MaxSteps:        400,
+		MaxIdleSessions: 3,
+		store:           s,
+		agent:           a,
+		wake:            make(chan struct{}, 1),
+		done:            make(chan struct{}),
 	}
 }
 
@@ -178,8 +183,11 @@ func (r *Runner) do(ctx context.Context, run *store.AIRun) {
 // returns the final status, the agent's summary and an error message.
 func (r *Runner) work(ctx context.Context, j *job) (status, summary, msg string) {
 	run := j.run
-	cost, steps := run.Cost, 0
+	cost, steps, idle := run.Cost, 0, 0
 	for session := 1; ; session++ {
+		// A fresh session doesn't know the strings handed out before; those
+		// the last one didn't get to are handed out again.
+		j.reoffer()
 		left, err := j.left(ctx)
 		if err != nil {
 			return store.AIFailed, summary, err.Error()
@@ -198,6 +206,7 @@ func (r *Runner) work(ctx context.Context, j *job) (status, summary, msg string)
 			System: systemPrompt(j),
 			Prompt: prompt,
 			Tools:  j.tools(),
+			Log:    func(ctx context.Context, msg string) { j.log(ctx, "%s", msg) },
 			BeforeStep: func(ctx context.Context) error {
 				switch {
 				case r.cancelRequested():
@@ -220,8 +229,16 @@ func (r *Runner) work(ctx context.Context, j *job) (status, summary, msg string)
 				}
 			},
 		})
+		if j.saved > 0 {
+			idle = 0
+		} else {
+			idle++
+		}
 		switch {
 		case errors.Is(err, errSessionFull):
+			if idle >= r.MaxIdleSessions {
+				return store.AIDone, summary, fmt.Sprintf("Stopped after %d sessions in a row that saved nothing.", idle)
+			}
 			continue
 		case errors.Is(err, errCancelled):
 			return store.AICancelled, summary, ""
@@ -235,10 +252,13 @@ func (r *Runner) work(ctx context.Context, j *job) (status, summary, msg string)
 		if text != "" {
 			summary = text
 		}
-		// The model stopped by itself. If it saved something, a fresh
-		// session goes on with what's left; if not, it has given up.
-		if j.saved == 0 {
+		// The model stopped by itself. A fresh session goes on with what's
+		// left; after a few that saved nothing, it has given up.
+		if idle >= r.MaxIdleSessions {
 			return store.AIDone, summary, ""
+		}
+		if idle > 0 {
+			j.log(ctx, "the model stopped without saving anything; starting a fresh session")
 		}
 	}
 }

@@ -292,6 +292,43 @@ func (s *Store) AIPending(ctx context.Context, lang string, aiUserID int64, inpu
 	return out, rows.Err()
 }
 
+// AIFill counts a language's missing strings, those without a translation,
+// that still lack a suggestion for the current source text.
+type AIFill struct {
+	Lang     string
+	Missing  int
+	NotByAI  int // without a suggestion from the chosen AI user
+	NotByAny int // without a suggestion from any AI user
+}
+
+// AIFillStats counts per language what aiUserID, and the AI users together,
+// have left to suggest among the missing strings.
+func (s *Store) AIFillStats(ctx context.Context, aiUserID int64) ([]AIFill, error) {
+	rows, err := s.r.QueryContext(ctx, `
+		SELECT l.code, count(s.key),
+			coalesce(sum(NOT EXISTS (SELECT 1 FROM suggestions g
+				WHERE g.lang = l.code AND g.key = s.key AND g.source_hash = s.hash AND g.user_id = ?1)), 0),
+			coalesce(sum(NOT EXISTS (SELECT 1 FROM suggestions g JOIN users u ON u.id = g.user_id
+				WHERE g.lang = l.code AND g.key = s.key AND g.source_hash = s.hash AND u.ai_model IS NOT NULL)), 0)
+		FROM languages l
+		LEFT JOIN source_strings s ON s.removed = 0 AND s.draft = 0
+			AND NOT EXISTS (SELECT 1 FROM translations t WHERE t.lang = l.code AND t.key = s.key)
+		GROUP BY l.code ORDER BY l.code`, aiUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AIFill
+	for rows.Next() {
+		var f AIFill
+		if err := rows.Scan(&f.Lang, &f.Missing, &f.NotByAI, &f.NotByAny); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
 // AIMatch is an existing translation found by AILookup.
 type AIMatch struct {
 	Key, Source, Text string

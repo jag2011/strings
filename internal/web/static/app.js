@@ -160,6 +160,11 @@
   const reload = document.querySelector("[data-reload]");
   if (reload) setTimeout(() => location.reload(), Number(reload.dataset.reload) * 1000);
 
+  // Choices that change what a page shows apply right away.
+  for (const el of document.querySelectorAll("[data-autosubmit]")) {
+    el.addEventListener("change", () => el.form.requestSubmit());
+  }
+
   for (const el of document.querySelectorAll("[data-confirm]")) {
     el.addEventListener("click", (e) => {
       if (!confirm(el.dataset.confirm)) e.preventDefault();

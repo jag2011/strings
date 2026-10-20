@@ -114,6 +114,28 @@ func TestOpenRouterSession(t *testing.T) {
 	}
 }
 
+// A tool call whose arguments aren't JSON is dropped by go-agent, which
+// ends the session; the log says so.
+func TestOpenRouterBrokenToolCall(t *testing.T) {
+	broken := `[{"type": "function_call", "id": "fc_2", "call_id": "call_2", "name": "get_job", "arguments": "{\"translations\": [{\"key\": \"a", "status": "completed"}]`
+	fake := &fakeResponses{outputs: []string{callGetJob, broken}}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	o := newOpenRouter("key", openrouter.WithServerURL(srv.URL))
+
+	var steps []store.AIUsage
+	var logged []string
+	s := testSession(&steps)
+	s.Log = func(_ context.Context, msg string) { logged = append(logged, msg) }
+	text, err := o.Run(context.Background(), s)
+	if err != nil || text != "" || len(fake.requests) != 2 {
+		t.Fatalf("text %q, err %v after %d requests", text, err, len(fake.requests))
+	}
+	if len(logged) != 1 || !strings.Contains(logged[0], "without a usable tool call: completed; get_job call with broken arguments (28 bytes: unexpected end of JSON input)") {
+		t.Errorf("logged: %q", logged)
+	}
+}
+
 func TestOpenRouterBeforeStepEndsSession(t *testing.T) {
 	fake := &fakeResponses{outputs: []string{callGetJob, sayDone}}
 	srv := httptest.NewServer(fake)

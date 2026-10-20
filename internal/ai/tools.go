@@ -25,8 +25,8 @@ type job struct {
 	sourceName string // the source language
 	prompt     string // the system prompt, before filling in variables
 	// offered holds the keys next_strings returned, so a string the agent
-	// can't get right isn't handed out again and again. A restarted run
-	// starts with an empty set and tries those strings once more.
+	// can't get right isn't handed out again and again. Each session starts
+	// with only the failed ones; a restarted run tries those once more.
 	offered map[string]bool
 	// failed holds keys whose last save had errors.
 	failed map[string]bool
@@ -36,6 +36,16 @@ type job struct {
 
 func (j *job) saveJob() store.AISaveJob {
 	return store.AISaveJob{Lang: j.run.Lang, AIUserID: j.run.UserID, Input: j.run.Input, Suggest: j.run.Suggest}
+}
+
+// reoffer lets next_strings hand out again what it handed out before,
+// except the strings whose last save had errors.
+func (j *job) reoffer() {
+	for k := range j.offered {
+		if !j.failed[k] {
+			delete(j.offered, k)
+		}
+	}
 }
 
 // left returns the pending strings next_strings hasn't handed out yet.

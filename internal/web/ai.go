@@ -109,6 +109,9 @@ func (srv *Server) aiTranslate(w http.ResponseWriter, r *http.Request, u *store.
 		return err
 	}
 	srv.AI.Wake()
+	if r.PostFormValue("from") == "fill" {
+		return redirect(w, r, fmt.Sprintf("/admin/ai/fill?user=%d", ai.ID), fmt.Sprintf("Run #%d queued: %s.", run.ID, aiPlan(run, pending)))
+	}
 	return redirect(w, r, fmt.Sprintf("/admin/ai/runs/%d", run.ID), "")
 }
 
@@ -133,6 +136,49 @@ func aiPlan(run *store.AIRun, pending []store.AIString) string {
 		return plan + ", all already translated, as suggestions"
 	}
 	return plan + ", as translations"
+}
+
+type aiFillData struct {
+	Enabled bool          // an OpenRouter key is set
+	Users   []*store.User // AI users only
+	User    *store.User   // the chosen one
+	Fill    []store.AIFill
+	Active  map[string]*store.AIRun // the chosen user's queued or running run per language
+	MaxCost string
+}
+
+// aiFillPage shows per language how many missing strings the chosen AI
+// user, and all AI users together, haven't suggested anything for yet.
+func (srv *Server) aiFillPage(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	users, err := srv.store.Users(r.Context())
+	if err != nil {
+		return err
+	}
+	d := aiFillData{Enabled: srv.AI != nil, Active: map[string]*store.AIRun{}, MaxCost: DefaultAICostLimit}
+	id, _ := strconv.ParseInt(r.URL.Query().Get("user"), 10, 64)
+	for _, au := range users {
+		if au.IsAI() && !au.Disabled {
+			d.Users = append(d.Users, au)
+			if d.User == nil || au.ID == id {
+				d.User = au
+			}
+		}
+	}
+	if d.User != nil {
+		if d.Fill, err = srv.store.AIFillStats(r.Context(), d.User.ID); err != nil {
+			return err
+		}
+		runs, err := srv.store.AIRuns(r.Context(), 50)
+		if err != nil {
+			return err
+		}
+		for _, run := range runs {
+			if run.UserID == d.User.ID && run.Active() && d.Active[run.Lang] == nil {
+				d.Active[run.Lang] = run
+			}
+		}
+	}
+	return srv.render(w, r, http.StatusOK, "aifill", u, "AI fill", d)
 }
 
 type aiRunData struct {

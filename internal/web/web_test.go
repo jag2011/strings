@@ -964,6 +964,54 @@ func TestAIPage(t *testing.T) {
 	}
 }
 
+func TestAIFillPage(t *testing.T) {
+	e := setupWith(t, nil, func(s *Server) { s.AI = ai.NewRunner(s.store, stoppingAgent{}) })
+	admin := e.user("admin@example.com", "admin")
+	tr := e.user("tr@example.com", "translator")
+	ctx := context.Background()
+	if res, _ := e.get(tr, "/admin/ai/fill"); res.StatusCode != http.StatusForbidden {
+		t.Errorf("translator: %d", res.StatusCode)
+	}
+	if _, body := e.get(admin, "/admin/ai/fill"); !strings.Contains(body, "There are no AI users yet") {
+		t.Error("no hint without AI users")
+	}
+	e.store.CreateAIUser(ctx, "Claude Opus", "anthropic/claude-opus-5.5")
+	gpt, _ := e.store.CreateAIUser(ctx, "GPT", "openai/gpt-6")
+	e.store.Suggest(ctx, "de", "bye", "Tschüss", gpt.ID)
+	page := func(path string) string {
+		_, body := e.get(admin, path)
+		return strings.Join(strings.Fields(body), " ")
+	}
+	body := page("/admin/ai/fill")
+	for _, want := range []string{`aria-current="page">Fill</a>`, "No suggestion from Claude Opus", "<td >3</td> <td >3</td> <td >2</td>", `<button class="small" >Fill</button>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("first AI user: misses %q", want)
+		}
+	}
+	gptFill := fmt.Sprintf("/admin/ai/fill?user=%d", gpt.ID)
+	body = page(gptFill)
+	for _, want := range []string{fmt.Sprintf(`<option value="%d" selected>GPT`, gpt.ID), "<td >3</td> <td >2</td> <td >2</td>"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("GPT: misses %q", want)
+		}
+	}
+
+	res := e.post(admin, "/admin/ai", url.Values{"from": {"fill"}, "lang": {"de"}, "user": {fmt.Sprint(gpt.ID)},
+		"input": {"missing"}, "suggest": {"1"}, "max_cost": {DefaultAICostLimit}})
+	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != gptFill {
+		t.Fatalf("fill: %d %s", res.StatusCode, res.Header.Get("Location"))
+	}
+	if r, _ := e.store.AIRun(ctx, 1); r.Input != store.AIInputMissing || !r.Suggest || r.MaxCost != 5 || r.UserID != gpt.ID {
+		t.Errorf("run: %+v", r)
+	}
+	if body = page(gptFill); !strings.Contains(body, `<a href="/admin/ai/runs/1">#1</a> <span class="tag run-queued">`) || strings.Contains(body, ">Fill</button>") {
+		t.Error("active run not shown in place of the button")
+	}
+	if body = page("/admin/ai/fill"); !strings.Contains(body, `<button class="small" >Fill</button>`) {
+		t.Error("other AI user's run blocks the button")
+	}
+}
+
 func TestAIPromptPage(t *testing.T) {
 	e := setup(t)
 	admin := e.user("admin@example.com", "admin")

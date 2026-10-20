@@ -63,6 +63,32 @@ func TestAIPending(t *testing.T) {
 	}
 }
 
+func TestAIFillStats(t *testing.T) {
+	s, ai, p := aiSetup(t)
+	ctx := context.Background()
+	other, _ := s.CreateAIUser(ctx, "Other", "openai/gpt-6")
+	s.Suggest(ctx, "de", "a", "Apfel", other.ID)
+	s.Suggest(ctx, "de", "d", "Tage", p.ID)     // a person's suggestion doesn't count
+	s.Suggest(ctx, "de", "c", "Kirsche", ai.ID) // c isn't missing
+	s.AddLanguage(ctx, "fr")
+	fill, err := s.AIFillStats(ctx, ai.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []AIFill{{Lang: "de", Missing: 2, NotByAI: 2, NotByAny: 1}, {Lang: "fr", Missing: 4, NotByAI: 4, NotByAny: 4}}
+	if !slices.Equal(fill, want) {
+		t.Errorf("before: %+v", fill)
+	}
+	s.Suggest(ctx, "de", "d", "{n, plural, one{# Tag} other{# Tage}}", ai.ID)
+	fill, _ = s.AIFillStats(ctx, ai.ID)
+	if f := fill[0]; f.NotByAI != 1 || f.NotByAny != 0 {
+		t.Errorf("after: %+v", f)
+	}
+	if fill, _ = s.AIFillStats(ctx, other.ID); fill[0].NotByAI != 1 {
+		t.Errorf("other: %+v", fill[0])
+	}
+}
+
 func TestAISaveRules(t *testing.T) {
 	s, ai, p := aiSetup(t)
 	ctx := context.Background()

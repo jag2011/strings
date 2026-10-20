@@ -34,6 +34,9 @@ type Session struct {
 	BeforeStep func(context.Context) error
 	// AfterStep reports what each model call used.
 	AfterStep func(context.Context, store.AIUsage)
+	// Log notes something worth knowing about the session in the run's log,
+	// like an answer the agent couldn't use.
+	Log func(context.Context, string)
 }
 
 // Tool is a function the model can call.

@@ -1,0 +1,52 @@
+{{define "content"}}
+{{$d := .Data}}
+{{template "aiNav" "fill"}}
+<h1>Fill</h1>
+
+{{if not $d.Users}}
+<section class="card">
+  <p>There are no AI users yet. <a href="{{base}}/admin/users">Add one under Users</a>, then come back here.</p>
+</section>
+{{else}}
+{{if not $d.Enabled}}
+<p class="note outdated">AI translation needs an OpenRouter API key. Set <code>OPENROUTER_API_KEY</code> in the server's environment (<code>/etc/strings/strings.env</code> in production) and restart it.</p>
+{{end}}
+<form method="get" action="{{base}}/admin/ai/fill" class="fill-user">
+  <label>AI user
+    <select name="user" data-autosubmit>
+      {{range $d.Users}}<option value="{{.ID}}" {{if eq .ID $d.User.ID}}selected{{end}}>{{.Name}} · {{.AIModel}}</option>{{end}}
+    </select>
+  </label>
+  <noscript><button>Show</button></noscript>
+</form>
+
+<p class="muted small">Missing strings have no translation. Only suggestions for the current source text count. Fill starts a job for {{$d.User.Name}}'s missing strings, saved as suggestions, with a cost limit of ${{$d.MaxCost}}.</p>
+<table class="runs fill">
+  <thead><tr><th>Language</th><th>Missing</th><th>No suggestion from {{$d.User.Name}}</th><th>No suggestion from any AI</th><th></th></tr></thead>
+  <tbody>
+  {{range $d.Fill}}
+  <tr>
+    <td><a href="{{base}}/t/{{.Lang}}">{{langName .Lang}}</a> <code>{{.Lang}}</code></td>
+    <td {{if not .Missing}}class="muted"{{end}}>{{.Missing}}</td>
+    <td {{if not .NotByAI}}class="muted"{{end}}>{{.NotByAI}}</td>
+    <td {{if not .NotByAny}}class="muted"{{end}}>{{.NotByAny}}</td>
+    <td>
+      {{with index $d.Active .Lang}}<a href="{{base}}/admin/ai/runs/{{.ID}}">#{{.ID}}</a> {{template "runStatus" .}}
+      {{else}}
+      <form method="post" action="{{base}}/admin/ai">
+        <input type="hidden" name="from" value="fill">
+        <input type="hidden" name="lang" value="{{.Lang}}">
+        <input type="hidden" name="user" value="{{$d.User.ID}}">
+        <input type="hidden" name="input" value="missing">
+        <input type="hidden" name="suggest" value="1">
+        <input type="hidden" name="max_cost" value="{{$d.MaxCost}}">
+        <button class="small" {{if or (not $d.Enabled) (not .NotByAI)}}disabled{{end}}>Fill</button>
+      </form>
+      {{end}}
+    </td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+{{end}}

@@ -2,7 +2,10 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	agent "github.com/OpenRouterTeam/go-agent"
@@ -76,6 +79,9 @@ func (o *OpenRouter) Run(ctx context.Context, s Session) (string, error) {
 			if s.AfterStep != nil {
 				s.AfterStep(ctx, usage(step.Usage))
 			}
+			if msg := oddAnswer(step); msg != "" && s.Log != nil {
+				s.Log(ctx, msg)
+			}
 			return nil
 		},
 	})
@@ -96,4 +102,47 @@ func usage(u *components.Usage) store.AIUsage {
 		out.Cost = c
 	}
 	return out
+}
+
+// oddAnswer describes a model answer the session can't go on from, or one
+// with a tool call that go-agent drops: unless arguments parse as JSON, the
+// call is skipped silently, and an answer without calls ends the session.
+// It returns "" for ordinary answers.
+func oddAnswer(step agent.StepResult) string {
+	resp := step.Response
+	var items []string
+	broken := false
+	for _, it := range resp.Output {
+		switch {
+		case it.OutputFunctionCallItem != nil:
+			fc := it.OutputFunctionCallItem
+			if err := json.Unmarshal([]byte(fc.Arguments), new(any)); err != nil && strings.TrimSpace(fc.Arguments) != "" {
+				items = append(items, fmt.Sprintf("%s call with broken arguments (%d bytes: %v)", fc.Name, len(fc.Arguments), err))
+				broken = true
+			} else {
+				items = append(items, fc.Name+" call")
+			}
+		case it.OutputMessageItem != nil:
+			items = append(items, "text")
+		case it.OutputReasoningItem != nil:
+			items = append(items, "reasoning")
+		default:
+			items = append(items, string(it.Type))
+		}
+	}
+	status := string(resp.Status)
+	if resp.IncompleteDetails != nil && resp.IncompleteDetails.Reason != nil {
+		status += " (" + string(*resp.IncompleteDetails.Reason) + ")"
+	}
+	if !broken && len(step.ToolCalls) > 0 && resp.Status == components.OpenAIResponsesResponseStatusCompleted {
+		return ""
+	}
+	if !broken && len(step.ToolCalls) == 0 && strings.TrimSpace(step.Text) != "" && resp.Status == components.OpenAIResponsesResponseStatusCompleted {
+		return "" // a final answer
+	}
+	out := "the model answered without a usable tool call: " + status
+	if len(items) == 0 {
+		return out + ", no output"
+	}
+	return out + "; " + strings.Join(items, ", ")
 }
