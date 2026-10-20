@@ -39,6 +39,11 @@ func (f *fakeResponses) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": {"message": "no more outputs"}}`, http.StatusBadRequest)
 		return
 	}
+	if f.outputs[n] == breakOff {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		return
+	}
 	// Streamed like the real API: the body is read after the SDK's Send
 	// returned, which a plain JSON answer wouldn't test.
 	event := []byte(`{"type": "response.completed", "sequence_number": 0, "response": {"id": "resp_` + string(rune('a'+n)) + `", "object": "response", "created_at": 1, "completed_at": 2, "model": "test/model",
@@ -54,6 +59,7 @@ func (f *fakeResponses) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 const (
+	breakOff   = "break off" // a stream that ends without a response
 	callGetJob = `[{"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "get_job", "arguments": "{}", "status": "completed"}]`
 	sayDone    = `[{"type": "message", "id": "msg_1", "role": "assistant", "status": "completed",
 		"content": [{"type": "output_text", "text": "Done.", "annotations": []}]}]`
@@ -114,11 +120,12 @@ func TestOpenRouterSession(t *testing.T) {
 	}
 }
 
-// A tool call whose arguments aren't JSON is dropped by go-agent, which
-// ends the session; the log says so.
-func TestOpenRouterBrokenToolCall(t *testing.T) {
+// A tool call whose arguments aren't JSON would be dropped by go-agent,
+// ending the session. Instead the model gets an error and tries again; a
+// stream that breaks off is sent again.
+func TestOpenRouterRecovers(t *testing.T) {
 	broken := `[{"type": "function_call", "id": "fc_2", "call_id": "call_2", "name": "get_job", "arguments": "{\"translations\": [{\"key\": \"a", "status": "completed"}]`
-	fake := &fakeResponses{outputs: []string{callGetJob, broken}}
+	fake := &fakeResponses{outputs: []string{callGetJob, broken, breakOff, sayDone}}
 	srv := httptest.NewServer(fake)
 	defer srv.Close()
 	o := newOpenRouter("key", openrouter.WithServerURL(srv.URL))
@@ -128,11 +135,27 @@ func TestOpenRouterBrokenToolCall(t *testing.T) {
 	s := testSession(&steps)
 	s.Log = func(_ context.Context, msg string) { logged = append(logged, msg) }
 	text, err := o.Run(context.Background(), s)
-	if err != nil || text != "" || len(fake.requests) != 2 {
-		t.Fatalf("text %q, err %v after %d requests", text, err, len(fake.requests))
+	if err != nil || text != "Done." || len(fake.requests) != 4 || len(steps) != 3 {
+		t.Fatalf("text %q, err %v after %d requests, %d steps", text, err, len(fake.requests), len(steps))
 	}
-	if len(logged) != 1 || !strings.Contains(logged[0], "without a usable tool call: completed; get_job call with broken arguments (28 bytes: unexpected end of JSON input)") {
+	want := `get_job call with arguments that aren't valid JSON (unexpected end of JSON input at byte 28 of 28, after "{\"translations\": [{\"key\": \"a"); asked the model to send it again`
+	if len(logged) != 1 || logged[0] != want {
 		t.Errorf("logged: %q", logged)
+	}
+	in, _ := json.Marshal(fake.requests[3]["input"])
+	if !strings.Contains(string(in), "weren't valid JSON, so nothing happened") {
+		t.Errorf("the model wasn't told: %s", in)
+	}
+}
+
+func TestOpenRouterBrokenStream(t *testing.T) {
+	fake := &fakeResponses{outputs: []string{breakOff, breakOff, breakOff}}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	o := newOpenRouter("key", openrouter.WithServerURL(srv.URL))
+	var steps []store.AIUsage
+	if _, err := o.Run(context.Background(), testSession(&steps)); err == nil || !strings.Contains(err.Error(), "broke off") || len(fake.requests) != 3 {
+		t.Fatalf("err %v after %d requests", err, len(fake.requests))
 	}
 }
 
