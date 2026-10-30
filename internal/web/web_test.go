@@ -386,6 +386,29 @@ func TestAPI(t *testing.T) {
 	if code != 200 || !strings.Contains(body, `"added": 1`) {
 		t.Errorf("translations: %d %s", code, body)
 	}
+
+	// Choices for changed strings, made on a preview.
+	src := `{"hello": "Hello, {name}!", "bye": "Goodbye!"}`
+	code, body = do("POST", "/api/v1/source/preview", src, token)
+	if code != 200 || !strings.Contains(body, `"revision": 2`) || !strings.Contains(body, `"new": "Hello, {name}!"`) || !strings.Contains(body, `"translations": 1`) {
+		t.Errorf("preview: %d %s", code, body)
+	}
+	if code, body := do("PUT", "/api/v1/source?revision=1&keep=hello", src, token); code != 409 {
+		t.Errorf("stale revision: %d %s", code, body)
+	}
+	if code, body := do("PUT", "/api/v1/source?keep=nope", src, token); code != 400 {
+		t.Errorf("unknown key: %d %s", code, body)
+	}
+	if code, body := do("PUT", "/api/v1/source?keep=hello&remove=hello", src, token); code != 400 {
+		t.Errorf("kept and removed: %d %s", code, body)
+	}
+	code, body = do("PUT", "/api/v1/source?revision=2&keep=hello", src, token)
+	if code != 200 || !strings.Contains(body, `"kept": 1`) || !strings.Contains(body, `"outdated": 1`) {
+		t.Errorf("decisions: %d %s", code, body)
+	}
+	if code, body := do("POST", "/api/v1/source/preview", src, token); !strings.Contains(body, `"modified": false`) {
+		t.Errorf("preview after import: %d %s", code, body)
+	}
 	code, body = do("GET", "/api/v1/arb/intl_fr.arb", "", token)
 	if code != 200 || body != "{\n  \"hello\": \"Bonjour {name} !\"\n}" {
 		t.Errorf("export: %d %q", code, body)

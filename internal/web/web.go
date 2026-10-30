@@ -192,6 +192,7 @@ func (srv *Server) Handler() http.Handler {
 
 	api := http.NewServeMux()
 	api.HandleFunc("PUT /api/v1/source", srv.apiSource)
+	api.HandleFunc("POST /api/v1/source/preview", srv.apiSourcePreview)
 	api.HandleFunc("PUT /api/v1/translations/{lang}", srv.apiTranslations)
 	api.HandleFunc("GET /api/v1/arb/{file}", srv.apiExport)
 	api.HandleFunc("GET /api/v1/arb.zip", srv.apiExportZip)

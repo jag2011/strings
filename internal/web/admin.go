@@ -584,17 +584,72 @@ func readARB(w http.ResponseWriter, r *http.Request) (*arb.File, bool) {
 	return f, true
 }
 
+// apiSourcePreview is the API's review page: what importing the source would
+// change, without changing it.
+func (srv *Server) apiSourcePreview(w http.ResponseWriter, r *http.Request) {
+	f, ok := readARB(w, r)
+	if !ok {
+		return
+	}
+	d, err := srv.store.PreviewSource(r.Context(), f)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	changed := []map[string]any{}
+	for _, c := range d.Changed {
+		changed = append(changed, map[string]any{
+			"key": c.Key, "old": c.Old, "new": c.New, "translations": c.Translations, "was_draft": c.WasDraft,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"revision": d.Revision, "modified": d.Modified, "added": nonNil(d.Added), "removed": nonNil(d.Removed),
+		"changed": changed, "unchanged": d.Unchanged,
+	})
+}
+
+// apiSource imports the source. Translations of changed strings become
+// outdated unless the keep or remove parameters name them. With revision, the
+// choices were made on a preview of that revision, so a newer source is a
+// conflict.
 func (srv *Server) apiSource(w http.ResponseWriter, r *http.Request) {
 	f, ok := readARB(w, r)
 	if !ok {
 		return
 	}
-	res, err := srv.store.ImportSource(r.Context(), f, nil)
+	d, err := srv.store.PreviewSource(r.Context(), f)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]int{"revision": res.Revision, "added": res.Added, "changed": res.Changed, "removed": res.Removed, "unchanged": res.Unchanged})
+	q := r.URL.Query()
+	if rev := q.Get("revision"); rev != "" && rev != strconv.Itoa(d.Revision) {
+		jsonError(w, http.StatusConflict, "the source is at revision "+strconv.Itoa(d.Revision)+", not "+rev)
+		return
+	}
+	decide := map[string]string{}
+	for _, v := range []string{store.KeepTranslations, store.RemoveTranslations} {
+		for _, k := range q[v] {
+			if !slices.ContainsFunc(d.Changed, func(c store.Change) bool { return c.Key == k }) {
+				jsonError(w, http.StatusBadRequest, "not a changed string: "+k)
+				return
+			}
+			if decide[k] != "" {
+				jsonError(w, http.StatusBadRequest, "both kept and removed: "+k)
+				return
+			}
+			decide[k] = v
+		}
+	}
+	res, err := srv.store.ImportSource(r.Context(), f, decide)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{
+		"revision": res.Revision, "added": res.Added, "changed": res.Changed, "removed": res.Removed, "unchanged": res.Unchanged,
+		"kept": res.Kept, "outdated": res.Outdated, "cleared": res.Cleared,
+	})
 }
 
 func (srv *Server) apiTranslations(w http.ResponseWriter, r *http.Request) {

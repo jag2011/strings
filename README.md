@@ -94,7 +94,8 @@ done
 
 | Endpoint | |
 |---|---|
-| `PUT /api/v1/source` | Body: source ARB. Returns the new revision and added, changed, removed and unchanged counts. Translations of changed strings become outdated |
+| `POST /api/v1/source/preview` | Body: source ARB. Shows what `PUT /api/v1/source` would change, like the review in the web UI: the revision, added and removed keys, and the changed strings with their old and new text, number of translations and whether they were drafts. Changes nothing |
+| `PUT /api/v1/source` | Body: source ARB. Returns the new revision and added, changed, removed and unchanged counts. Translations of changed strings become outdated, except for keys listed in `keep` or `remove` parameters (`?keep=a&keep=b&remove=c`). With `revision` from a preview, it fails with 409 if the source changed since |
 | `PUT /api/v1/translations/{lang}` | Body: ARB. Seeds a language; never overwrites edits or approvals made in strings |
 | `GET /api/v1/arb/{prefix}{lang}.arb` | One language |
 | `GET /api/v1/arb.zip` | All target languages |
