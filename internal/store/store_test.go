@@ -277,6 +277,21 @@ func TestSourceDecisions(t *testing.T) {
 		t.Errorf("suggestions left: %v", left)
 	}
 
+	// An older file doesn't bring back the removed translation or mark the outdated one up to date.
+	tr, err := s.ImportTranslations(ctx, "de", parse(t, `{"a": "Die Katze", "b": "Hund", "c": "Vogel", "e": "Neu"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.Added != 1 || tr.Unchanged != 2 || strings.Join(tr.Stale, ",") != "c" {
+		t.Errorf("older file: %+v", tr)
+	}
+	if e := entry(t, s, "de", "c"); e.Has {
+		t.Errorf("c came back: %+v", e.Row)
+	}
+	if e := entry(t, s, "de", "b"); !e.Outdated {
+		t.Errorf("b should stay outdated")
+	}
+
 	// The same file again changes nothing and keeps the revision.
 	if d, _ := s.PreviewSource(ctx, f); d.Modified || d.Revision != 2 {
 		t.Errorf("reimport: %+v", d)

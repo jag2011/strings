@@ -669,7 +669,7 @@ func (srv *Server) apiTranslations(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"added": res.Added, "updated": res.Updated, "unchanged": res.Unchanged,
-		"skipped": nonNil(res.Skipped), "unknown": nonNil(res.Unknown), "invalid": nonNil(res.Invalid),
+		"skipped": nonNil(res.Skipped), "stale": nonNil(res.Stale), "unknown": nonNil(res.Unknown), "invalid": nonNil(res.Invalid),
 	})
 }
 

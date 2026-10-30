@@ -218,6 +218,7 @@ func boolSetting(b bool) string {
 type TranslationResult struct {
 	Added, Updated, Unchanged int
 	Skipped                   []string // keys edited or approved in strings, which an import never overwrites
+	Stale                     []string // texts strings had before and changed or removed since: the file is older
 	Unknown                   []string // keys not in the source
 	Invalid                   []string // keys failing validation, e.g. broken braces; not imported
 	Empty                     []string // empty translations of non-empty source text; left missing
@@ -227,7 +228,7 @@ type TranslationResult struct {
 
 // ImportTranslations seeds a language from an existing ARB file. Imported
 // texts count as up to date with the current source. Texts edited or approved
-// in strings are never overwritten.
+// in strings are never overwritten, and texts it had before never come back.
 func (s *Store) ImportTranslations(ctx context.Context, lang string, f *arb.File) (TranslationResult, error) {
 	var res TranslationResult
 	if !arb.ValidLocale(lang) {
@@ -275,6 +276,21 @@ func (s *Store) ImportTranslations(ctx context.Context, lang string, f *arb.File
 				res.Untranslated = append(res.Untranslated, m.Key)
 				continue
 			}
+			if found && curText == m.Text {
+				res.Unchanged++
+				continue
+			}
+			// A version from the history was replaced or removed here since,
+			// e.g. when the source text changed. The file predates that.
+			var stale bool
+			if err := tx.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM history WHERE lang = ? AND key = ? AND text = ?)",
+				lang, m.Key, m.Text).Scan(&stale); err != nil {
+				return err
+			}
+			if stale {
+				res.Stale = append(res.Stale, m.Key)
+				continue
+			}
 			errs, warns := arb.Check(srcText, m.Text)
 			if len(errs) > 0 {
 				res.Invalid = append(res.Invalid, m.Key)
@@ -286,9 +302,6 @@ func (s *Store) ImportTranslations(ctx context.Context, lang string, f *arb.File
 			switch {
 			case !found:
 				res.Added++
-			case curText == m.Text:
-				res.Unchanged++
-				continue
 			case curOrigin != "import" || approved:
 				res.Skipped = append(res.Skipped, m.Key)
 				continue

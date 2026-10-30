@@ -271,6 +271,7 @@ func importFiles(dbPath string, paths []string) error {
 					keys []string
 				}{
 					{"kept, edited here", t.Skipped},
+					{"changed or removed here since", t.Stale},
 					{"not in source", t.Unknown},
 					{"invalid, not imported", t.Invalid},
 					{"empty, left missing", t.Empty},

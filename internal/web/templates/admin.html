@@ -15,6 +15,7 @@
         {{with .Source.Changed}}<br><span class="muted small">Translations of changed strings: {{$r.Source.Kept}} kept, {{$r.Source.Outdated}} marked outdated, {{$r.Source.Cleared}} removed</span>{{end}}
       {{else if .Trans}}{{langName .Lang}} · {{.Trans.Added}} added, {{.Trans.Updated}} updated, {{.Trans.Unchanged}} unchanged
         {{with .Trans.Skipped}}<br><span class="muted small">{{len .}} kept because they were edited here</span>{{end}}
+        {{with .Trans.Stale}}<br><span class="muted small">{{len .}} changed or removed here since, ignored: {{range $i, $k := .}}{{if $i}}, {{end}}<a href="{{base}}/t/{{$r.Lang}}/{{esc $k}}">{{$k}}</a>{{end}}</span>{{end}}
         {{with .Trans.Unknown}}<br><span class="muted small">{{len .}} keys not in the source, ignored</span>{{end}}
         {{with .Trans.Invalid}}<br><span class="error-text small">{{len .}} failed validation, not imported: {{range $i, $k := .}}{{if $i}}, {{end}}{{$k}}{{end}}</span>{{end}}
         {{with .Trans.Untranslated}}<br><span class="muted small">{{len .}} same as the source text, left missing</span>{{end}}
