@@ -1001,12 +1001,14 @@ func TestAIFillPage(t *testing.T) {
 	e.store.CreateAIUser(ctx, "Claude Opus", "anthropic/claude-opus-5.5")
 	gpt, _ := e.store.CreateAIUser(ctx, "GPT", "openai/gpt-6")
 	e.store.Suggest(ctx, "de", "bye", "Tschüss", gpt.ID)
+	e.store.AddLanguage(ctx, "fr")
+	deBox := `<input type="checkbox" name="lang" value="de" aria-label="German" data-fill="1" data-promote="0" >`
 	page := func(path string) string {
 		_, body := e.get(admin, path)
 		return strings.Join(strings.Fields(body), " ")
 	}
 	body := page("/admin/ai/fill")
-	for _, want := range []string{`aria-current="page">Fill</a>`, "No suggestion from Claude Opus", "<td >3</td> <td >3</td> <td >2</td>", `<button class="small" >Fill</button>`} {
+	for _, want := range []string{`aria-current="page">Fill</a>`, "No suggestion from Claude Opus", "<td >3</td> <td >3</td> <td >2</td>", deBox, "Create fill jobs</button>"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("first AI user: misses %q", want)
 		}
@@ -1019,19 +1021,40 @@ func TestAIFillPage(t *testing.T) {
 		}
 	}
 
-	res := e.post(admin, "/admin/ai", url.Values{"from": {"fill"}, "lang": {"de"}, "user": {fmt.Sprint(gpt.ID)},
-		"input": {"missing"}, "suggest": {"1"}, "max_cost": {DefaultAICostLimit}})
+	// One run per chosen language; unknown languages are left out.
+	fill := url.Values{"user": {fmt.Sprint(gpt.ID)}, "lang": {"de", "fr", "xx"}}
+	res := e.post(admin, "/admin/ai/fill", fill)
 	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != gptFill {
 		t.Fatalf("fill: %d %s", res.StatusCode, res.Header.Get("Location"))
 	}
-	if r, _ := e.store.AIRun(ctx, 1); r.Input != store.AIInputMissing || !r.Suggest || r.MaxCost != 5 || r.UserID != gpt.ID {
-		t.Errorf("run: %+v", r)
+	runs, _ := e.store.AIRuns(ctx, 10)
+	if len(runs) != 2 {
+		t.Fatalf("runs: %d", len(runs))
 	}
-	if body = page(gptFill); !strings.Contains(body, `<a href="/admin/ai/runs/1">#1</a> <span class="tag run-queued">`) || strings.Contains(body, ">Fill</button>") {
-		t.Error("active run not shown in place of the button")
+	for _, r := range runs {
+		if r.Input != store.AIInputMissing || !r.Suggest || r.MaxCost != 5 || r.UserID != gpt.ID {
+			t.Errorf("run: %+v", r)
+		}
 	}
-	if body = page("/admin/ai/fill"); !strings.Contains(body, `<button class="small" >Fill</button>`) {
-		t.Error("other AI user's run blocks the button")
+	// Submitting again doesn't queue the same languages twice.
+	e.post(admin, "/admin/ai/fill", fill)
+	if runs, _ := e.store.AIRuns(ctx, 10); len(runs) != 2 {
+		t.Errorf("runs after resubmit: %d", len(runs))
+	}
+	if body = page(gptFill); !strings.Contains(body, `<a href="/admin/ai/runs/1">#1</a> <span class="tag run-queued">`) || strings.Contains(body, deBox) {
+		t.Error("active run not shown in place of the checkbox")
+	}
+	if body = page("/admin/ai/fill"); !strings.Contains(body, deBox) {
+		t.Error("other AI user's run blocks the checkbox")
+	}
+
+	// GPT's suggestion for bye becomes the German translation.
+	res = e.post(admin, "/admin/ai/promote", url.Values{"user": {fmt.Sprint(gpt.ID)}, "lang": {"de", "xx"}})
+	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != gptFill {
+		t.Fatalf("promote: %d %s", res.StatusCode, res.Header.Get("Location"))
+	}
+	if en, _ := e.store.Entry(ctx, "de", "bye"); en.Text != "Tschüss" || en.UserID != gpt.ID || en.Approved {
+		t.Errorf("promoted: %+v", en.Row)
 	}
 }
 

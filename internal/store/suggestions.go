@@ -30,6 +30,11 @@ const sameSuggestion = "coalesce(t.text = g.text AND t.source_hash = s.hash, 0)"
 // made for the current source text and not the same as translation t.
 const pendingSuggestion = "g.source_hash = s.hash AND NOT " + sameSuggestion
 
+// promotableSuggestion is the condition for suggestions g that can become
+// translation t of source string s without picking between them: made for the
+// current source text, for a string that is missing or outdated and not approved.
+const promotableSuggestion = "g.source_hash = s.hash AND (t.key IS NULL OR (t.source_hash != s.hash AND t.approved_by IS NULL))"
+
 // Suggest stores userID's suggestion for a string, replacing their previous one.
 func (s *Store) Suggest(ctx context.Context, lang, key, text string, userID int64) error {
 	return suggest(ctx, s.w, lang, key, text, userID)
@@ -152,4 +157,50 @@ func (s *Store) DismissSuggestion(ctx context.Context, lang, key string, id int6
 		return ErrNotFound
 	}
 	return nil
+}
+
+// PromoteSuggestions makes userID's suggestions the translations of the
+// strings that are missing or outdated in lang, as UseSuggestion does: credited
+// to userID, unapproved. It returns how many it promoted.
+func (s *Store) PromoteSuggestions(ctx context.Context, lang string, userID int64) (int, error) {
+	type pick struct {
+		id                int64
+		key, text, origin string
+	}
+	var picks []pick
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT g.id, g.key, g.text, iif(u.ai_model IS NULL, 'user', 'machine')
+			FROM suggestions g
+			JOIN source_strings s ON s.key = g.key AND s.removed = 0 AND s.draft = 0
+			JOIN users u ON u.id = g.user_id
+			LEFT JOIN translations t ON t.lang = g.lang AND t.key = g.key
+			WHERE g.lang = ? AND g.user_id = ? AND `+promotableSuggestion+`
+			ORDER BY s.position`, lang, userID)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var p pick
+			if err := rows.Scan(&p.id, &p.key, &p.text, &p.origin); err != nil {
+				rows.Close()
+				return err
+			}
+			picks = append(picks, p)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, p := range picks {
+			if _, err := save(ctx, tx, lang, p.key, p.text, p.origin, userID, userID, -1, KeepApproval); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, "DELETE FROM suggestions WHERE id = ?", p.id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return len(picks), err
 }

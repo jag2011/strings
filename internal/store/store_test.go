@@ -774,3 +774,50 @@ func TestSuggestions(t *testing.T) {
 		t.Errorf("merged: %+v", e.Suggestions)
 	}
 }
+
+func TestPromoteSuggestions(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana", "c": "Cherry", "d": "Date", "e": "Elder"}`), nil)
+	s.AddLanguage(ctx, "de")
+	opus, _ := s.CreateAIUser(ctx, "Claude Opus", "anthropic/claude-opus-5.5")
+	haiku, _ := s.CreateAIUser(ctx, "Claude Haiku", "anthropic/claude-haiku-5.5")
+	p, _ := s.CreateUser(ctx, "p@example.com", "Petra", "proofreader")
+	s.Save(ctx, "de", "a", "Apfel", p.ID, -1, KeepApproval)
+	s.Save(ctx, "de", "b", "Banane", p.ID, -1, KeepApproval)
+	s.Save(ctx, "de", "c", "Kirsche", p.ID, -1, Approve)
+	s.Suggest(ctx, "de", "e", "Holunder", opus.ID)
+	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Bananas", "c": "Cherry", "d": "Date", "e": "Elderberry"}`), nil)
+	for k, text := range map[string]string{"a": "Der Apfel", "b": "Bananen", "c": "Die Kirsche", "d": "Dattel"} {
+		s.Suggest(ctx, "de", k, text, opus.ID)
+	}
+	s.Suggest(ctx, "de", "d", "Die Dattel", haiku.ID)
+
+	// Only the outdated b and the missing d; e's suggestion is for the old source.
+	if fill, _ := s.AIFillStats(ctx, opus.ID); len(fill) != 1 || fill[0].Promotable != 2 {
+		t.Fatalf("promotable: %+v", fill)
+	}
+	n, err := s.PromoteSuggestions(ctx, "de", opus.ID)
+	if err != nil || n != 2 {
+		t.Fatalf("promote: %d %v", n, err)
+	}
+	for k, text := range map[string]string{"b": "Bananen", "d": "Dattel"} {
+		if e := entry(t, s, "de", k); e.Text != text || e.Origin != "machine" || e.UserID != opus.ID || e.Outdated || e.Approved {
+			t.Errorf("%s promoted: %+v", k, e.Row)
+		}
+	}
+	if e := entry(t, s, "de", "d"); len(e.Suggestions) != 1 || e.Suggestions[0].UserID != haiku.ID {
+		t.Errorf("other AI user's suggestion should stay: %+v", e.Suggestions)
+	}
+	if e := entry(t, s, "de", "a"); e.Text != "Apfel" || len(e.Suggestions) != 1 {
+		t.Errorf("up-to-date translation replaced: %+v", e)
+	}
+	if e := entry(t, s, "de", "c"); e.Text != "Kirsche" || !e.Approved {
+		t.Errorf("approved translation replaced: %+v", e.Row)
+	}
+	if e := entry(t, s, "de", "e"); e.Has {
+		t.Errorf("suggestion for the old source promoted: %+v", e.Row)
+	}
+	if n, _ := s.PromoteSuggestions(ctx, "de", opus.ID); n != 0 {
+		t.Errorf("promoted again: %d", n)
+	}
+}

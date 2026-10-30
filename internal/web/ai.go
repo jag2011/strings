@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"slices"
@@ -100,19 +101,26 @@ func (srv *Server) aiTranslate(w http.ResponseWriter, r *http.Request, u *store.
 		return fail(fmt.Sprintf("%s has no missing strings left for %s.", langName(d.Lang), ai.Name))
 	}
 
-	run, err := srv.store.CreateAIRun(r.Context(), store.AIRun{Lang: d.Lang, UserID: ai.ID, StartedBy: u.ID, Input: d.Input,
-		Suggest: d.Suggest, MaxCost: maxCost})
+	run, err := srv.queueAIRun(r.Context(), u, store.AIRun{Lang: d.Lang, UserID: ai.ID, Input: d.Input, Suggest: d.Suggest, MaxCost: maxCost}, pending)
 	if err != nil {
 		return err
 	}
-	if err := srv.store.AddAIRunEvent(r.Context(), run.ID, fmt.Sprintf("queued by %s: %s", u.Name, aiPlan(run, pending))); err != nil {
-		return err
+	return redirect(w, r, fmt.Sprintf("/admin/ai/runs/%d", run.ID), "")
+}
+
+// queueAIRun creates a run for the pending strings, started by u, and wakes
+// the runner.
+func (srv *Server) queueAIRun(ctx context.Context, u *store.User, run store.AIRun, pending []store.AIString) (*store.AIRun, error) {
+	run.StartedBy = u.ID
+	created, err := srv.store.CreateAIRun(ctx, run)
+	if err != nil {
+		return nil, err
+	}
+	if err := srv.store.AddAIRunEvent(ctx, created.ID, fmt.Sprintf("queued by %s: %s", u.Name, aiPlan(created, pending))); err != nil {
+		return nil, err
 	}
 	srv.AI.Wake()
-	if r.PostFormValue("from") == "fill" {
-		return redirect(w, r, fmt.Sprintf("/admin/ai/fill?user=%d", ai.ID), fmt.Sprintf("Run #%d queued: %s.", run.ID, aiPlan(run, pending)))
-	}
-	return redirect(w, r, fmt.Sprintf("/admin/ai/runs/%d", run.ID), "")
+	return created, nil
 }
 
 // aiPlan says what a run will do with the pending strings.
@@ -168,17 +176,107 @@ func (srv *Server) aiFillPage(w http.ResponseWriter, r *http.Request, u *store.U
 		if d.Fill, err = srv.store.AIFillStats(r.Context(), d.User.ID); err != nil {
 			return err
 		}
-		runs, err := srv.store.AIRuns(r.Context(), 50)
-		if err != nil {
+		if d.Active, err = srv.activeAIRuns(r.Context(), d.User.ID); err != nil {
 			return err
-		}
-		for _, run := range runs {
-			if run.UserID == d.User.ID && run.Active() && d.Active[run.Lang] == nil {
-				d.Active[run.Lang] = run
-			}
 		}
 	}
 	return srv.render(w, r, http.StatusOK, "aifill", u, "AI fill", d)
+}
+
+// activeAIRuns returns an AI user's queued or running run per language.
+func (srv *Server) activeAIRuns(ctx context.Context, userID int64) (map[string]*store.AIRun, error) {
+	runs, err := srv.store.AIRuns(ctx, 50)
+	if err != nil {
+		return nil, err
+	}
+	active := map[string]*store.AIRun{}
+	for _, run := range runs {
+		if run.UserID == userID && run.Active() && active[run.Lang] == nil {
+			active[run.Lang] = run
+		}
+	}
+	return active, nil
+}
+
+// aiFill queues a run per chosen language for the AI user's missing strings,
+// saved as suggestions. Languages it's already working on are left out.
+func (srv *Server) aiFill(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	id, _ := strconv.ParseInt(r.PostFormValue("user"), 10, 64)
+	back := fmt.Sprintf("/admin/ai/fill?user=%d", id)
+	if srv.AI == nil {
+		return redirect(w, r, back, "AI translation needs OPENROUTER_API_KEY; see the README.")
+	}
+	ai, err := srv.store.User(r.Context(), id)
+	if err != nil || !ai.IsAI() || ai.Disabled {
+		return badRequest("Choose an AI user.")
+	}
+	stats, err := srv.store.Stats(r.Context())
+	if err != nil {
+		return err
+	}
+	active, err := srv.activeAIRuns(r.Context(), ai.ID)
+	if err != nil {
+		return err
+	}
+	maxCost, _ := strconv.ParseFloat(DefaultAICostLimit, 64)
+	var queued []string
+	for _, lang := range r.PostForm["lang"] {
+		if active[lang] != nil || !slices.ContainsFunc(stats, func(s store.LangStats) bool { return s.Lang == lang }) {
+			continue
+		}
+		pending, err := srv.store.AIPending(r.Context(), lang, ai.ID, store.AIInputMissing)
+		if err != nil {
+			return err
+		}
+		if len(pending) == 0 {
+			continue
+		}
+		run, err := srv.queueAIRun(r.Context(), u, store.AIRun{Lang: lang, UserID: ai.ID, Input: store.AIInputMissing, Suggest: true, MaxCost: maxCost}, pending)
+		if err != nil {
+			return err
+		}
+		queued = append(queued, fmt.Sprintf("#%d %s", run.ID, langName(lang)))
+	}
+	if len(queued) == 0 {
+		return redirect(w, r, back, "Choose one or more languages with strings to fill.")
+	}
+	return redirect(w, r, back, fmt.Sprintf("%d fill %s queued: %s.", len(queued), plural(len(queued), "job", "jobs"), strings.Join(queued, ", ")))
+}
+
+// aiPromote makes the AI user's suggestions the translations of the strings
+// missing or outdated in the chosen languages, unapproved, as if each was used
+// in the editor.
+func (srv *Server) aiPromote(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	id, _ := strconv.ParseInt(r.PostFormValue("user"), 10, 64)
+	back := fmt.Sprintf("/admin/ai/fill?user=%d", id)
+	ai, err := srv.store.User(r.Context(), id)
+	if err != nil || !ai.IsAI() {
+		return badRequest("Choose an AI user.")
+	}
+	stats, err := srv.store.Stats(r.Context())
+	if err != nil {
+		return err
+	}
+	var total int
+	var done []string
+	for _, lang := range r.PostForm["lang"] {
+		if !slices.ContainsFunc(stats, func(s store.LangStats) bool { return s.Lang == lang }) {
+			continue
+		}
+		n, err := srv.store.PromoteSuggestions(r.Context(), lang, ai.ID)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			total += n
+			done = append(done, fmt.Sprintf("%s %d", langName(lang), n))
+		}
+	}
+	if total == 0 {
+		return redirect(w, r, back, "Choose one or more languages with suggestions to promote.")
+	}
+	return redirect(w, r, back, fmt.Sprintf("Promoted %d %s from %s to unapproved translations: %s.",
+		total, plural(total, "suggestion", "suggestions"), ai.Name, strings.Join(done, ", ")))
 }
 
 type aiRunData struct {

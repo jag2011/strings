@@ -165,6 +165,32 @@
     el.addEventListener("change", () => el.form.requestSubmit());
   }
 
+  // A checkbox per row: one in the header selects all of them, and each
+  // submit button sums what the chosen rows have for it in data-{pickSum}.
+  for (const form of document.querySelectorAll("[data-pick]")) {
+    const all = form.querySelector("[data-pick-all]");
+    const submits = form.querySelectorAll("[data-pick-submit]");
+    const boxes = [...form.querySelectorAll("tbody input[type=checkbox]")].filter((b) => !b.disabled);
+    const update = () => {
+      const checked = boxes.filter((b) => b.checked);
+      all.checked = checked.length > 0 && checked.length === boxes.length;
+      all.indeterminate = checked.length > 0 && checked.length < boxes.length;
+      for (const submit of submits) {
+        const n = checked.reduce((sum, b) => sum + Number(b.dataset[submit.dataset.pickSum]), 0);
+        submit.textContent = submit.dataset.pickSubmit.replace("{n}", n);
+        submit.disabled = n === 0;
+      }
+    };
+    all.hidden = false;
+    all.disabled = boxes.length === 0;
+    all.addEventListener("change", () => {
+      for (const b of boxes) b.checked = all.checked;
+      update();
+    });
+    for (const b of boxes) b.addEventListener("change", update);
+    update();
+  }
+
   for (const el of document.querySelectorAll("[data-confirm]")) {
     el.addEventListener("click", (e) => {
       if (!confirm(el.dataset.confirm)) e.preventDefault();

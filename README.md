@@ -197,6 +197,11 @@ Runs that a server restart interrupted can be started again and continue
 where they stopped. Several AI users can translate the same language; their
 suggestions appear side by side in the editor.
 
+*AI → Fill* shows per language what an AI user has left to suggest. Tick
+languages to create fill jobs for its missing strings, or to promote its
+suggestions: they become the translations of missing and outdated strings,
+unapproved, and wait for a proofreader like any other machine translation.
+
 ## Running in production
 
 - Put it behind a reverse proxy that terminates TLS and sets

@@ -299,10 +299,13 @@ type AIFill struct {
 	Missing  int
 	NotByAI  int // without a suggestion from the chosen AI user
 	NotByAny int // without a suggestion from any AI user
+
+	Promotable int // missing or outdated strings with a suggestion from the chosen AI user
 }
 
 // AIFillStats counts per language what aiUserID, and the AI users together,
-// have left to suggest among the missing strings.
+// have left to suggest among the missing strings, and what aiUserID's
+// suggestions could fill in.
 func (s *Store) AIFillStats(ctx context.Context, aiUserID int64) ([]AIFill, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT l.code, count(s.key),
@@ -325,6 +328,32 @@ func (s *Store) AIFillStats(ctx context.Context, aiUserID int64) ([]AIFill, erro
 			return nil, err
 		}
 		out = append(out, f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	rows, err = s.r.QueryContext(ctx, `
+		SELECT g.lang, count(*) FROM suggestions g
+		JOIN source_strings s ON s.key = g.key AND s.removed = 0 AND s.draft = 0
+		LEFT JOIN translations t ON t.lang = g.lang AND t.key = g.key
+		WHERE g.user_id = ? AND `+promotableSuggestion+`
+		GROUP BY g.lang`, aiUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	promotable := map[string]int{}
+	for rows.Next() {
+		var lang string
+		var n int
+		if err := rows.Scan(&lang, &n); err != nil {
+			return nil, err
+		}
+		promotable[lang] = n
+	}
+	for i := range out {
+		out[i].Promotable = promotable[out[i].Lang]
 	}
 	return out, rows.Err()
 }

@@ -144,7 +144,8 @@ Schema: [`internal/store/schema/001_init.sql`](../internal/store/schema/001_init
   the current source text and differ from the current translation. *Use*
   makes one current, credited to whoever suggested it; proofreaders can also
   *Use & approve* or *Dismiss*. The list tags strings that have suggestions
-  and aren't approved yet.
+  and aren't approved yet. *Promote* on the Fill page does *Use* in bulk for
+  one AI user and language, for missing and outdated strings only.
 
 ## Accounts
 

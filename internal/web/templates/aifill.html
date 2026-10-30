@@ -20,33 +20,32 @@
   <noscript><button>Show</button></noscript>
 </form>
 
-<p class="muted small">Missing strings have no translation. Only suggestions for the current source text count. Fill starts a job for {{$d.User.Name}}'s missing strings, saved as suggestions, with a cost limit of ${{$d.MaxCost}}.</p>
-<table class="runs fill">
-  <thead><tr><th>Language</th><th>Missing</th><th>No suggestion from {{$d.User.Name}}</th><th>No suggestion from any AI</th><th></th></tr></thead>
-  <tbody>
-  {{range $d.Fill}}
-  <tr>
-    <td><a href="{{base}}/t/{{.Lang}}">{{langName .Lang}}</a> <code>{{.Lang}}</code></td>
-    <td {{if not .Missing}}class="muted"{{end}}>{{.Missing}}</td>
-    <td {{if not .NotByAI}}class="muted"{{end}}>{{.NotByAI}}</td>
-    <td {{if not .NotByAny}}class="muted"{{end}}>{{.NotByAny}}</td>
-    <td>
-      {{with index $d.Active .Lang}}<a href="{{base}}/admin/ai/runs/{{.ID}}">#{{.ID}}</a> {{template "runStatus" .}}
-      {{else}}
-      <form method="post" action="{{base}}/admin/ai">
-        <input type="hidden" name="from" value="fill">
-        <input type="hidden" name="lang" value="{{.Lang}}">
-        <input type="hidden" name="user" value="{{$d.User.ID}}">
-        <input type="hidden" name="input" value="missing">
-        <input type="hidden" name="suggest" value="1">
-        <input type="hidden" name="max_cost" value="{{$d.MaxCost}}">
-        <button class="small" {{if or (not $d.Enabled) (not .NotByAI)}}disabled{{end}}>Fill</button>
-      </form>
-      {{end}}
-    </td>
-  </tr>
-  {{end}}
-  </tbody>
-</table>
+<p class="muted small">Missing strings have no translation. Only suggestions for the current source text count. Each fill job translates {{$d.User.Name}}'s missing strings in one language, saved as suggestions, with a cost limit of ${{$d.MaxCost}}.
+  Promoting makes {{$d.User.Name}}'s suggestions the translations of missing and outdated strings, unapproved, so proofreaders find them under <em>unapproved</em>.</p>
+<form method="post" action="{{base}}/admin/ai/fill" data-pick>
+  <input type="hidden" name="user" value="{{$d.User.ID}}">
+  <table class="runs fill">
+    <thead><tr><th><input type="checkbox" aria-label="Select all" data-pick-all hidden></th><th>Language</th><th>Missing</th><th>No suggestion from {{$d.User.Name}}</th><th>No suggestion from any AI</th><th>To promote</th><th></th></tr></thead>
+    <tbody>
+    {{range $d.Fill}}
+    {{$run := index $d.Active .Lang}}
+    <tr>
+      {{$fill := and $d.Enabled (gt .NotByAI 0)}}
+      <td>{{if not $run}}<input type="checkbox" name="lang" value="{{.Lang}}" aria-label="{{langName .Lang}}" data-fill="{{if $fill}}1{{else}}0{{end}}" data-promote="{{.Promotable}}" {{if not (or $fill .Promotable)}}disabled{{end}}>{{end}}</td>
+      <td><a href="{{base}}/t/{{.Lang}}">{{langName .Lang}}</a> <code>{{.Lang}}</code></td>
+      <td {{if not .Missing}}class="muted"{{end}}>{{.Missing}}</td>
+      <td {{if not .NotByAI}}class="muted"{{end}}>{{.NotByAI}}</td>
+      <td {{if not .NotByAny}}class="muted"{{end}}>{{.NotByAny}}</td>
+      <td {{if not .Promotable}}class="muted"{{end}}>{{.Promotable}}</td>
+      <td>{{with $run}}<a href="{{base}}/admin/ai/runs/{{.ID}}">#{{.ID}}</a> {{template "runStatus" .}}{{end}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  <div class="actions">
+    <button class="primary" data-pick-submit="Create ({n}) fill jobs" data-pick-sum="fill" {{if not $d.Enabled}}disabled{{end}}>Create fill jobs</button>
+    <button formaction="{{base}}/admin/ai/promote" data-pick-submit="Promote ({n}) suggestions" data-pick-sum="promote">Promote suggestions</button>
+  </div>
+</form>
 {{end}}
 {{end}}
