@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -26,10 +27,16 @@ const usage = `stringsd: the strings server, minimalistic string management
 Usage:
   stringsd serve  [-db strings.db] [-addr :8080] [-base /strings] [-trust-proxy] [-public]
   stringsd user   [-db strings.db] [-admin | -proofreader] [-url http://localhost:8080] <email> <name>
-  stringsd import [-db strings.db] <file.arb>...
-  stringsd export [-db strings.db] [-out .]
+  stringsd import [-db strings.db] [-root .] <file.arb>...
+  stringsd export [-db strings.db] [-out .] [-file name]
   stringsd token  [-db strings.db] <name>
   stringsd backup [-db strings.db] <out.db>
+
+import takes paths relative to -root, the repository root (default: the
+working directory), and matches them against the files' path templates, like
+lib/l10n/intl_{locale}.arb. A source file that matches none creates a file.
+export writes every file's translations at their paths under -out, or those
+of one file with -file.
 
 The database path can also be set with STRINGS_DB, the listen address with
 STRINGS_ADDR. -base (or STRINGS_BASE) serves the app under a path, like
@@ -90,12 +97,14 @@ func main() {
 		}
 		err = addUser(*dbPath, fs.Arg(0), fs.Arg(1), role, *base)
 	case "import":
+		root := fs.String("root", ".", "the repository root the paths are relative to")
 		fs.Parse(args)
-		err = importFiles(*dbPath, fs.Args())
+		err = importFiles(*dbPath, *root, fs.Args())
 	case "export":
-		out := fs.String("out", ".", "output directory")
+		out := fs.String("out", ".", "output directory, the repository root")
+		file := fs.String("file", "", "only the file with this name")
 		fs.Parse(args)
-		err = export(*dbPath, *out)
+		err = export(*dbPath, *out, *file)
 	case "token":
 		fs.Parse(args)
 		if fs.NArg() != 1 {
@@ -234,9 +243,15 @@ func addUser(dbPath, email, name, role, base string) error {
 	})
 }
 
-func importFiles(dbPath string, paths []string) error {
+// importFiles imports files by their paths relative to root. Files outside
+// root are matched by their file name alone.
+func importFiles(dbPath, root string, paths []string) error {
 	if len(paths) == 0 {
 		return fmt.Errorf("no files given")
+	}
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return err
 	}
 	files := map[string][]byte{}
 	for _, p := range paths {
@@ -244,27 +259,41 @@ func importFiles(dbPath string, paths []string) error {
 		if err != nil {
 			return err
 		}
-		files[filepath.Base(p)] = data
+		name := filepath.Base(p)
+		if abs, err := filepath.Abs(p); err == nil {
+			if rel, err := filepath.Rel(root, abs); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				name = filepath.ToSlash(rel)
+			}
+		}
+		files[name] = data
 	}
 	return withStore(dbPath, func(s *store.Store) error {
 		res, err := s.ImportFiles(context.Background(), files, nil)
 		if err != nil {
 			return err
 		}
+		width := 20
+		for _, r := range res {
+			width = max(width, len(r.Path))
+		}
 		failed := false
 		for _, r := range res {
 			switch {
 			case r.Err != nil:
 				failed = true
-				fmt.Printf("%-20s error: %v\n", r.File, r.Err)
+				fmt.Printf("%-*s error: %v\n", width, r.Path, r.Err)
 			case r.Source != nil:
-				fmt.Printf("%-20s source: revision %d, %d added, %d changed, %d removed, %d unchanged\n",
-					r.File, r.Source.Revision, r.Source.Added, r.Source.Changed, r.Source.Removed, r.Source.Unchanged)
+				what := "source"
+				if r.NewFile {
+					what = "new file " + r.File.Name + " at " + r.File.Template + ", source"
+				}
+				fmt.Printf("%-*s %s: revision %d, %d added, %d changed, %d removed, %d unchanged\n",
+					width, r.Path, what, r.Source.Revision, r.Source.Added, r.Source.Changed, r.Source.Removed, r.Source.Unchanged)
 			default:
 				t := r.Trans
-				fmt.Printf("%-20s %d added, %d updated, %d unchanged\n", r.File, t.Added, t.Updated, t.Unchanged)
+				fmt.Printf("%-*s %d added, %d updated, %d unchanged\n", width, r.Path, t.Added, t.Updated, t.Unchanged)
 				if n := len(t.Untranslated); n > 0 {
-					fmt.Printf("%-20s   %d same as the source text, left missing\n", "", n)
+					fmt.Printf("%-*s   %d same as the source text, left missing\n", width, "", n)
 				}
 				for _, l := range []struct {
 					what string
@@ -278,7 +307,7 @@ func importFiles(dbPath string, paths []string) error {
 					{"imported with warnings", t.Warned},
 				} {
 					if len(l.keys) > 0 {
-						fmt.Printf("%-20s   %s: %s\n", "", l.what, strings.Join(l.keys, ", "))
+						fmt.Printf("%-*s   %s: %s\n", width, "", l.what, strings.Join(l.keys, ", "))
 					}
 				}
 			}
@@ -290,28 +319,41 @@ func importFiles(dbPath string, paths []string) error {
 	})
 }
 
-func export(dbPath, out string) error {
+// export writes the translations of every file, or of the one named, at
+// their paths under out. The source files belong to the app repository and
+// are not exported.
+func export(dbPath, out, name string) error {
 	return withStore(dbPath, func(s *store.Store) error {
 		ctx := context.Background()
-		set, err := s.Settings(ctx)
+		files, err := s.Files(ctx)
 		if err != nil {
 			return err
+		}
+		if name != "" {
+			files = slices.DeleteFunc(files, func(f store.File) bool { return f.Name != name })
+			if len(files) == 0 {
+				return fmt.Errorf("no file named %q", name)
+			}
 		}
 		langs, err := s.Languages(ctx)
 		if err != nil {
 			return err
 		}
-		// The source file belongs to the app repo and is not exported.
-		for _, lang := range langs {
-			f, err := s.Export(ctx, lang)
-			if err != nil {
-				return err
+		for _, file := range files {
+			for _, lang := range langs {
+				f, err := s.Export(ctx, file.ID, lang)
+				if err != nil {
+					return err
+				}
+				path := filepath.Join(out, filepath.FromSlash(file.Path(lang)))
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					return err
+				}
+				if err := os.WriteFile(path, arb.Write(f), 0o644); err != nil {
+					return err
+				}
+				fmt.Println(path)
 			}
-			path := filepath.Join(out, set["file_prefix"]+lang+".arb")
-			if err := os.WriteFile(path, arb.Write(f), 0o644); err != nil {
-				return err
-			}
-			fmt.Println(path)
 		}
 		return nil
 	})

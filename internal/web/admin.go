@@ -4,11 +4,12 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"path"
 	"regexp"
 	"slices"
 	"sort"
@@ -22,17 +23,30 @@ import (
 )
 
 type adminData struct {
-	Languages []string
-	Tokens    []store.APIToken
-	NewToken  string
-	Imported  []store.ImportResult
-	Error     string
+	Languages  []string
+	Files      []store.File
+	SourcePath string // of the first file, for the API example
+	Tokens     []store.APIToken
+	NewToken   string
+	Imported   []store.ImportResult
+	Error      string
 }
 
 func (srv *Server) renderAdmin(w http.ResponseWriter, r *http.Request, u *store.User, status int, d adminData) error {
 	var err error
 	if d.Languages, err = srv.store.Languages(r.Context()); err != nil {
 		return err
+	}
+	if d.Files, err = srv.store.FileStats(r.Context()); err != nil {
+		return err
+	}
+	set, err := srv.store.Settings(r.Context())
+	if err != nil {
+		return err
+	}
+	d.SourcePath = "lib/l10n/intl_" + set["source_lang"] + ".arb"
+	if len(d.Files) > 0 {
+		d.SourcePath = d.Files[0].Path(set["source_lang"])
 	}
 	if d.Tokens, err = srv.store.APITokens(r.Context()); err != nil {
 		return err
@@ -44,17 +58,13 @@ func (srv *Server) adminPage(w http.ResponseWriter, r *http.Request, u *store.Us
 	return srv.renderAdmin(w, r, u, http.StatusOK, adminData{})
 }
 
-var (
-	colorRe  = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
-	prefixRe = regexp.MustCompile(`^[A-Za-z0-9_.-]*$`)
-)
+var colorRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
 func (srv *Server) adminSettings(w http.ResponseWriter, r *http.Request, u *store.User) error {
 	m := map[string]string{
 		"name":        strings.TrimSpace(r.PostFormValue("name")),
 		"accent":      r.PostFormValue("accent"),
 		"source_lang": strings.TrimSpace(r.PostFormValue("source_lang")),
-		"file_prefix": strings.TrimSpace(r.PostFormValue("file_prefix")),
 	}
 	var msg string
 	switch {
@@ -64,8 +74,6 @@ func (srv *Server) adminSettings(w http.ResponseWriter, r *http.Request, u *stor
 		msg = "The accent color must look like #2f6fde."
 	case !arb.ValidLocale(m["source_lang"]):
 		msg = "The source language must be a locale like en or en_US."
-	case !prefixRe.MatchString(m["file_prefix"]):
-		msg = "The file prefix may only contain letters, digits, _ . and -."
 	}
 	if msg != "" {
 		return srv.renderAdmin(w, r, u, http.StatusUnprocessableEntity, adminData{Error: msg})
@@ -103,35 +111,109 @@ func (srv *Server) adminRemoveLanguage(w http.ResponseWriter, r *http.Request, u
 	return redirect(w, r, "/admin", "Removed "+langName(code)+". Its translations are kept and come back if you add it again.")
 }
 
+// adminUpdateFile changes a file's path template and name.
+func (srv *Server) adminUpdateFile(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	err := srv.store.UpdateFile(r.Context(), id, r.PostFormValue("path"), r.PostFormValue("name"))
+	var pe *store.PathError
+	if errors.As(err, &pe) {
+		return srv.renderAdmin(w, r, u, http.StatusUnprocessableEntity, adminData{Error: "Not saved: " + pe.Msg + "."})
+	} else if err != nil {
+		return err
+	}
+	return redirect(w, r, "/admin#files", "File saved.")
+}
+
+func (srv *Server) adminMoveFile(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err := srv.store.MoveFile(r.Context(), id, strings.HasSuffix(r.URL.Path, "/up")); err != nil {
+		return err
+	}
+	return redirect(w, r, "/admin#files", "")
+}
+
+// adminDeleteFile deletes a file nobody has worked on, like a mistaken upload.
+func (srv *Server) adminDeleteFile(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	f, err := srv.store.File(r.Context(), id)
+	if err != nil {
+		return err
+	}
+	if err := srv.store.DeleteFile(r.Context(), id); err != nil {
+		return err
+	}
+	return redirect(w, r, "/admin#files", "Deleted the file "+f.Name+".")
+}
+
 const maxUpload = 32 << 20
 
-// adminImport imports uploaded files. If they contain the source file, the
+// readUpload returns the uploaded files by path: .arb files by their file
+// name, since browsers send no folders, and the .arb files in a zip by
+// their paths in it.
+func readUpload(fhs []*multipart.FileHeader) (map[string][]byte, error) {
+	files := map[string][]byte{}
+	var total uint64
+	for _, fh := range fhs {
+		f, err := fh.Open()
+		if err != nil {
+			return nil, err
+		}
+		data, err := io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			return nil, err
+		}
+		name := path.Base(strings.ReplaceAll(fh.Filename, `\`, "/"))
+		if !strings.HasSuffix(strings.ToLower(name), ".zip") {
+			files[name] = data
+			continue
+		}
+		zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+		if err != nil {
+			return nil, badRequest(name + " is not a zip file.")
+		}
+		for _, zf := range zr.File {
+			// Leaves out folders, other files and the "._" files macOS adds.
+			p := zf.Name
+			if zf.FileInfo().IsDir() || !strings.HasSuffix(p, ".arb") || strings.HasPrefix(p, "__MACOSX/") || strings.HasPrefix(path.Base(p), ".") {
+				continue
+			}
+			if total += zf.UncompressedSize64; total > maxUpload {
+				return nil, badRequest("The files in " + name + " are too large.")
+			}
+			rc, err := zf.Open()
+			if err != nil {
+				return nil, badRequest(name + " could not be read: " + err.Error())
+			}
+			data, err := io.ReadAll(io.LimitReader(rc, maxUpload))
+			rc.Close()
+			if err != nil {
+				return nil, badRequest(name + " could not be read: " + err.Error())
+			}
+			files[p] = data
+		}
+	}
+	return files, nil
+}
+
+// adminImport imports uploaded files. If they contain source files, the
 // upload is kept and the changes are shown for review first.
 func (srv *Server) adminImport(w http.ResponseWriter, r *http.Request, u *store.User) error {
 	if err := r.ParseMultipartForm(maxUpload); err != nil {
 		return badRequest("The upload could not be read.")
 	}
-	files := map[string][]byte{}
-	for _, fh := range r.MultipartForm.File["files"] {
-		f, err := fh.Open()
-		if err != nil {
-			return err
-		}
-		data, err := io.ReadAll(f)
-		f.Close()
-		if err != nil {
-			return err
-		}
-		files[fh.Filename] = data
-	}
-	if len(files) == 0 {
-		return srv.renderAdmin(w, r, u, http.StatusUnprocessableEntity, adminData{Error: "Choose one or more .arb files."})
-	}
-	diff, _, err := srv.store.PreviewFiles(r.Context(), files)
+	files, err := readUpload(r.MultipartForm.File["files"])
 	if err != nil {
 		return err
 	}
-	if diff != nil {
+	if len(files) == 0 {
+		return srv.renderAdmin(w, r, u, http.StatusUnprocessableEntity, adminData{Error: "Choose one or more .arb files, or a zip with them."})
+	}
+	diffs, err := srv.store.PreviewFiles(r.Context(), files)
+	if err != nil {
+		return err
+	}
+	if len(diffs) > 0 {
 		id, err := srv.store.SaveUpload(r.Context(), files)
 		if err != nil {
 			return err
@@ -147,10 +229,24 @@ func (srv *Server) adminImport(w http.ResponseWriter, r *http.Request, u *store.
 
 type reviewData struct {
 	ID     string
-	File   string
-	Others []string // translation files imported along with the source
-	Diff   *store.SourceDiff
+	Diffs  []store.FileDiff
+	Others []string // translation files imported along with the sources
+	State  string   // see reviewState
 	Error  string
+}
+
+// reviewState sums up the files and revisions a review shows, so that
+// confirming notices a source imported in the meantime.
+func reviewState(diffs []store.FileDiff) string {
+	var parts []string
+	for _, d := range diffs {
+		if d.New() {
+			parts = append(parts, "new:"+d.File.Template)
+		} else {
+			parts = append(parts, fmt.Sprintf("%d:%d", d.File.ID, d.Diff.Revision))
+		}
+	}
+	return strings.Join(parts, ",")
 }
 
 func (srv *Server) renderReview(w http.ResponseWriter, r *http.Request, u *store.User, status int, id, msg string) error {
@@ -159,14 +255,15 @@ func (srv *Server) renderReview(w http.ResponseWriter, r *http.Request, u *store
 		return err
 	}
 	d := reviewData{ID: id, Error: msg}
-	if d.Diff, d.File, err = srv.store.PreviewFiles(r.Context(), files); err != nil {
+	if d.Diffs, err = srv.store.PreviewFiles(r.Context(), files); err != nil {
 		return err
 	}
-	if d.Diff == nil {
+	if len(d.Diffs) == 0 {
 		return notFound()
 	}
+	d.State = reviewState(d.Diffs)
 	for name := range files {
-		if name != d.File {
+		if !slices.ContainsFunc(d.Diffs, func(x store.FileDiff) bool { return x.Path == path.Clean(name) }) {
 			d.Others = append(d.Others, name)
 		}
 	}
@@ -195,28 +292,36 @@ func (srv *Server) adminReview(w http.ResponseWriter, r *http.Request, u *store.
 	return srv.renderReview(w, r, u, http.StatusOK, r.PathValue("id"), "")
 }
 
+// decisionField names the form field of a changed string's decision.
+func decisionField(file int64, key string) string { return fmt.Sprintf("t.%d.%s", file, key) }
+
 func (srv *Server) adminConfirmImport(w http.ResponseWriter, r *http.Request, u *store.User) error {
 	id := r.PathValue("id")
 	files, err := srv.store.Upload(r.Context(), id)
 	if err != nil {
 		return err
 	}
-	diff, _, err := srv.store.PreviewFiles(r.Context(), files)
+	diffs, err := srv.store.PreviewFiles(r.Context(), files)
 	if err != nil {
 		return err
 	}
-	if diff == nil {
+	if len(diffs) == 0 {
 		return notFound()
 	}
-	// The choices were made for the source as it was when the page was shown.
-	if r.PostFormValue("revision") != strconv.Itoa(diff.Revision) {
+	// The choices were made for the sources as they were when the page was shown.
+	if r.PostFormValue("state") != reviewState(diffs) {
 		return srv.renderReview(w, r, u, http.StatusConflict, id,
-			"The source was imported by someone else in the meantime. Here are the changes against the new state.")
+			"A source was imported by someone else in the meantime. Here are the changes against the new state.")
 	}
-	decide := map[string]string{}
-	for _, c := range diff.Changed {
-		if v := r.PostFormValue("t." + c.Key); slices.Contains(store.Decisions, v) {
-			decide[c.Key] = v
+	decide := map[int64]map[string]string{}
+	for _, d := range diffs {
+		for _, c := range d.Diff.Changed {
+			if v := r.PostFormValue(decisionField(d.File.ID, c.Key)); slices.Contains(store.Decisions, v) && !d.New() {
+				if decide[d.File.ID] == nil {
+					decide[d.File.ID] = map[string]string{}
+				}
+				decide[d.File.ID][c.Key] = v
+			}
 		}
 	}
 	res, err := srv.store.ImportFiles(r.Context(), files, decide)
@@ -468,248 +573,4 @@ func (srv *Server) adminMerge(w http.ResponseWriter, r *http.Request, u *store.U
 		return srv.renderMerge(w, r, u, http.StatusUnprocessableEntity, err.Error())
 	}
 	return redirect(w, r, fmt.Sprintf("/admin/users#user-%d", into), "Merged "+from.Name+" into "+target.Name+".")
-}
-
-// Export
-
-// exportLang maps "intl_de.arb" to "de" if the prefix matches and the
-// language exists (or is the source language).
-func (srv *Server) exportLang(r *http.Request, file string) (string, map[string]string, error) {
-	set, err := srv.store.Settings(r.Context())
-	if err != nil {
-		return "", nil, err
-	}
-	lang, ok := strings.CutPrefix(strings.TrimSuffix(file, ".arb"), set["file_prefix"])
-	if !ok || !strings.HasSuffix(file, ".arb") || !arb.ValidLocale(lang) {
-		return "", nil, notFound()
-	}
-	if lang != set["source_lang"] {
-		if err := srv.requireLang(r.Context(), lang); err != nil {
-			return "", nil, err
-		}
-	}
-	return lang, set, nil
-}
-
-func (srv *Server) writeARB(w http.ResponseWriter, r *http.Request, file string, attachment bool) error {
-	lang, _, err := srv.exportLang(r, file)
-	if err != nil {
-		return err
-	}
-	f, err := srv.store.Export(r.Context(), lang)
-	if err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	if attachment {
-		w.Header().Set("Content-Disposition", `attachment; filename="`+file+`"`)
-	}
-	_, err = w.Write(arb.Write(f))
-	return err
-}
-
-func (srv *Server) writeZip(w http.ResponseWriter, r *http.Request) error {
-	set, err := srv.store.Settings(r.Context())
-	if err != nil {
-		return err
-	}
-	langs, err := srv.store.Languages(r.Context())
-	if err != nil {
-		return err
-	}
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-	for _, lang := range langs {
-		f, err := srv.store.Export(r.Context(), lang)
-		if err != nil {
-			return err
-		}
-		fw, err := zw.Create(set["file_prefix"] + lang + ".arb")
-		if err != nil {
-			return err
-		}
-		fw.Write(arb.Write(f))
-	}
-	if err := zw.Close(); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+exportName(set["name"])+`.zip"`)
-	_, err = w.Write(buf.Bytes())
-	return err
-}
-
-func exportName(name string) string {
-	s := strings.Trim(regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(strings.ToLower(name), "-"), "-")
-	if s == "" {
-		return "strings"
-	}
-	return s
-}
-
-func (srv *Server) exportFile(w http.ResponseWriter, r *http.Request, u *store.User) error {
-	return srv.writeARB(w, r, r.PathValue("file"), true)
-}
-
-func (srv *Server) exportZip(w http.ResponseWriter, r *http.Request, u *store.User) error {
-	return srv.writeZip(w, r)
-}
-
-// API
-
-func jsonError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	enc.SetEscapeHTML(false)
-	enc.Encode(v)
-}
-
-func readARB(w http.ResponseWriter, r *http.Request) (*arb.File, bool) {
-	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxUpload))
-	if err != nil {
-		jsonError(w, http.StatusRequestEntityTooLarge, "body too large")
-		return nil, false
-	}
-	f, err := arb.Parse(data)
-	if err != nil {
-		jsonError(w, http.StatusBadRequest, err.Error())
-		return nil, false
-	}
-	return f, true
-}
-
-// apiSourcePreview is the API's review page: what importing the source would
-// change, without changing it.
-func (srv *Server) apiSourcePreview(w http.ResponseWriter, r *http.Request) {
-	f, ok := readARB(w, r)
-	if !ok {
-		return
-	}
-	d, err := srv.store.PreviewSource(r.Context(), f)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	changed := []map[string]any{}
-	for _, c := range d.Changed {
-		changed = append(changed, map[string]any{
-			"key": c.Key, "old": c.Old, "new": c.New, "translations": c.Translations, "was_draft": c.WasDraft,
-		})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"revision": d.Revision, "modified": d.Modified, "added": nonNil(d.Added), "removed": nonNil(d.Removed),
-		"changed": changed, "unchanged": d.Unchanged,
-	})
-}
-
-// apiSource imports the source. Translations of changed strings become
-// outdated unless the keep or remove parameters name them. With revision, the
-// choices were made on a preview of that revision, so a newer source is a
-// conflict.
-func (srv *Server) apiSource(w http.ResponseWriter, r *http.Request) {
-	f, ok := readARB(w, r)
-	if !ok {
-		return
-	}
-	d, err := srv.store.PreviewSource(r.Context(), f)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	q := r.URL.Query()
-	if rev := q.Get("revision"); rev != "" && rev != strconv.Itoa(d.Revision) {
-		jsonError(w, http.StatusConflict, "the source is at revision "+strconv.Itoa(d.Revision)+", not "+rev)
-		return
-	}
-	decide := map[string]string{}
-	for _, v := range []string{store.KeepTranslations, store.RemoveTranslations} {
-		for _, k := range q[v] {
-			if !slices.ContainsFunc(d.Changed, func(c store.Change) bool { return c.Key == k }) {
-				jsonError(w, http.StatusBadRequest, "not a changed string: "+k)
-				return
-			}
-			if decide[k] != "" {
-				jsonError(w, http.StatusBadRequest, "both kept and removed: "+k)
-				return
-			}
-			decide[k] = v
-		}
-	}
-	res, err := srv.store.ImportSource(r.Context(), f, decide)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]int{
-		"revision": res.Revision, "added": res.Added, "changed": res.Changed, "removed": res.Removed, "unchanged": res.Unchanged,
-		"kept": res.Kept, "outdated": res.Outdated, "cleared": res.Cleared,
-	})
-}
-
-func (srv *Server) apiTranslations(w http.ResponseWriter, r *http.Request) {
-	lang := r.PathValue("lang")
-	if !arb.ValidLocale(lang) {
-		jsonError(w, http.StatusBadRequest, "invalid language code")
-		return
-	}
-	f, ok := readARB(w, r)
-	if !ok {
-		return
-	}
-	res, err := srv.store.ImportTranslations(r.Context(), lang, f)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"added": res.Added, "updated": res.Updated, "unchanged": res.Unchanged,
-		"skipped": nonNil(res.Skipped), "stale": nonNil(res.Stale), "unknown": nonNil(res.Unknown), "invalid": nonNil(res.Invalid),
-	})
-}
-
-func nonNil(s []string) []string {
-	if s == nil {
-		return []string{}
-	}
-	return s
-}
-
-func (srv *Server) apiExport(w http.ResponseWriter, r *http.Request) {
-	if err := srv.writeARB(w, r, r.PathValue("file"), false); err != nil {
-		jsonError(w, http.StatusNotFound, "no such file")
-	}
-}
-
-func (srv *Server) apiExportZip(w http.ResponseWriter, r *http.Request) {
-	if err := srv.writeZip(w, r); err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
-	}
-}
-
-func (srv *Server) apiStats(w http.ResponseWriter, r *http.Request) {
-	stats, err := srv.store.Stats(r.Context())
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	out := map[string]map[string]int{}
-	for _, s := range stats {
-		out[s.Lang] = map[string]int{"total": s.Total, "done": s.Done, "outdated": s.Outdated, "missing": s.Missing, "human": s.Human, "approved": s.Approved}
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-
-func (srv *Server) apiContributors(w http.ResponseWriter, r *http.Request) {
-	c, err := srv.store.Contributors(r.Context())
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, c)
 }

@@ -11,6 +11,7 @@ import (
 // AI prompt page. The {{…}} variables are filled in per job.
 const DefaultPrompt = `You translate the user interface strings of an app from {{source}} into {{language}} ({{code}}). You work only through the tools; people review your work afterwards.
 
+File: {{file}}
 Job: {{job}}
 
 The strings are ICU messages from ARB files (Flutter):
@@ -33,6 +34,7 @@ How to work:
 
 // PromptVars are the variables a prompt can use, with what they stand for.
 var PromptVars = [][2]string{
+	{"file", "the file's name and path, e.g. store (fastlane/listing/store_{locale}.arb)"},
 	{"source", "the source language, e.g. English"},
 	{"language", "the target language, e.g. German"},
 	{"code", "the target language code, e.g. de"},
@@ -61,7 +63,7 @@ func CheckPrompt(prompt string) error {
 // systemPrompt fills in the job's prompt. It stays the same for all
 // sessions of a job, so providers can cache it.
 func systemPrompt(j *job) string {
-	vars := map[string]string{"source": j.sourceName, "language": j.langName, "code": j.run.Lang, "job": j.mode()}
+	vars := map[string]string{"file": j.fileLabel(), "source": j.sourceName, "language": j.langName, "code": j.run.Lang, "job": j.mode()}
 	return promptVarRe.ReplaceAllStringFunc(j.prompt, func(m string) string {
 		if v, ok := vars[promptVarRe.FindStringSubmatch(m)[1]]; ok {
 			return v

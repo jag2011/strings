@@ -5,13 +5,14 @@
 {{else}}
 <div class="with-side">
 <div>
+{{template "file-chips" .Data.Chips}}
 {{if not .Data.Stats}}
   <p class="empty">No languages yet.{{if .User.IsAdmin}} <a href="{{base}}/admin#languages">Add one</a>.{{end}}</p>
 {{end}}
 <ul class="langs">
 {{range .Data.Stats}}
   <li>
-    <a href="{{base}}/t/{{.Lang}}">
+    <a href="{{base}}/t/{{.Lang}}{{query "file" $.Data.File}}">
       <span class="lang-name">{{with flag .Lang}}<img class="flag" src="{{static .}}" alt="" width="20" height="15">{{else}}<span class="flag"></span>{{end}}{{langName .Lang}} <code>{{.Lang}}</code></span>
       {{template "progress-bar" .}}
       <span class="counts">
@@ -30,7 +31,8 @@
     <img class="project-icon" src="{{static "brand.png"}}" alt="" width="36" height="36">
     {{with .Data}}
     <ul class="stats">
-      <li><strong>{{.Total}}</strong> {{plural .Total "string" "strings"}} in {{langName .SourceLang}}</li>
+      <li><strong>{{.Total}}</strong> {{plural .Total "string" "strings"}} in {{langName .SourceLang}}{{with .File}} <span class="muted">in {{.}}</span>{{end}}</li>
+      {{if and $.Multi (not .File)}}<li><strong>{{len $.Files}}</strong> files</li>{{end}}
       {{if .Stats}}
       <li><strong>{{len .Stats}}</strong> {{plural (len .Stats) "language" "languages"}}, {{.Complete}} complete</li>
       <li><strong>{{.Sum.ApprovedPercent}}%</strong> approved</li>

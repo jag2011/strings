@@ -11,7 +11,18 @@
   {{if not $d.Users}}
   <p>There are no AI users yet. <a href="{{base}}/admin/users">Add one under Users</a>, then come back here.</p>
   {{else}}
+  {{if .Multi}}
+  <form method="get" action="{{base}}/admin/ai" class="fill-user">
+    <label>File
+      <select name="file" data-autosubmit>
+        {{range .Files}}<option value="{{.Name}}" {{if eq .ID $d.File.ID}}selected{{end}}>{{.Name}} · {{.Template}}</option>{{end}}
+      </select>
+    </label>
+    <noscript><button>Show</button></noscript>
+  </form>
+  {{end}}
   <form method="post" action="{{base}}/admin/ai" class="grid">
+    <input type="hidden" name="file" value="{{$d.File.Name}}">
     <label>Language
       <select name="lang" required>
         <option value="">Choose…</option>
@@ -49,12 +60,13 @@
 {{with $d.Runs}}
 <h2>Runs</h2>
 <table class="runs">
-  <thead><tr><th>Run</th><th>Language</th><th>AI user</th><th>Status</th><th>Saved</th><th>Cost</th><th>Queued</th></tr></thead>
+  <thead><tr><th>Run</th>{{if $.Multi}}<th>File</th>{{end}}<th>Language</th><th>AI user</th><th>Status</th><th>Saved</th><th>Cost</th><th>Queued</th></tr></thead>
   <tbody>
   {{range .}}
   <tr>
     <td><a href="{{base}}/admin/ai/runs/{{.ID}}">#{{.ID}}</a></td>
-    <td><a href="{{base}}/t/{{.Lang}}">{{langName .Lang}}</a></td>
+    {{if $.Multi}}<td>{{.FileName}}</td>{{end}}
+    <td><a href="{{base}}/t/{{.Lang}}{{if $.Multi}}{{query "file" .FileName}}{{end}}">{{langName .Lang}}</a></td>
     <td>{{.UserName}}</td>
     <td>{{template "runStatus" .}}</td>
     <td class="nowrap">{{.Translated}} translated · {{.Suggested}} suggested{{if .Failed}} · <span class="error-text">{{.Failed}} failed</span>{{end}}</td>

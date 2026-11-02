@@ -14,10 +14,66 @@ import (
 
 const pageSize = 100
 
+// strPath is the editor's path for a string.
+func strPath(lang, file, key string) string {
+	return "/t/" + lang + "/" + url.PathEscape(file) + "/" + url.PathEscape(key)
+}
+
+// fileFilter returns the file that ?file= limits a list to, or no file (ID
+// 0) for all files. An unknown name, like a renamed file, shows all.
+func (srv *Server) fileFilter(r *http.Request) (store.File, error) {
+	name := r.FormValue("file")
+	if name == "" {
+		return store.File{}, nil
+	}
+	f, err := srv.store.FileByName(r.Context(), name)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.File{}, nil
+	}
+	return f, err
+}
+
+// chip is a link that limits a page to one file, or shows all.
+type chip struct {
+	Label   string
+	URL     string
+	Current bool
+}
+
+// fileChips links to path once per file and once for all files, keeping
+// the other query parameters but the page. With one file there are none.
+func fileChips(files []store.File, current, path string, q url.Values) []chip {
+	if len(files) < 2 {
+		return nil
+	}
+	link := func(name string) string {
+		v := url.Values{}
+		for k, vs := range q {
+			if k != "file" && k != "page" {
+				v[k] = vs
+			}
+		}
+		if name != "" {
+			v.Set("file", name)
+		}
+		if len(v) == 0 {
+			return path
+		}
+		return path + "?" + v.Encode()
+	}
+	out := []chip{{"All files", link(""), current == ""}}
+	for _, f := range files {
+		out = append(out, chip{f.Name, link(f.Name), f.Name == current})
+	}
+	return out
+}
+
 type homeData struct {
 	Stats      []store.LangStats
 	SourceLang string
 	Total      int
+	File       string // the file the stats are limited to; empty for all
+	Chips      []chip
 
 	// Project totals for the side column, summed over all languages.
 	Complete int
@@ -26,7 +82,11 @@ type homeData struct {
 }
 
 func (srv *Server) home(w http.ResponseWriter, r *http.Request, u *store.User) error {
-	stats, err := srv.store.Stats(r.Context())
+	file, err := srv.fileFilter(r)
+	if err != nil {
+		return err
+	}
+	stats, err := srv.store.Stats(r.Context(), file.ID)
 	if err != nil {
 		return err
 	}
@@ -38,7 +98,12 @@ func (srv *Server) home(w http.ResponseWriter, r *http.Request, u *store.User) e
 	if err != nil {
 		return err
 	}
-	d := homeData{Stats: stats, SourceLang: set["source_lang"], Top: top}
+	files, err := srv.store.Files(r.Context())
+	if err != nil {
+		return err
+	}
+	d := homeData{Stats: stats, SourceLang: set["source_lang"], Top: top, File: file.Name,
+		Chips: fileChips(files, file.Name, "/", r.URL.Query())}
 	if len(stats) > 0 {
 		d.Total = stats[0].Total
 	}
@@ -57,6 +122,9 @@ func (srv *Server) home(w http.ResponseWriter, r *http.Request, u *store.User) e
 
 type listData struct {
 	Lang, Filter, Q string
+	File            string // the file the list is limited to; empty for all
+	Labels          bool   // rows show their file
+	Chips           []chip
 	Filters         []string
 	Counts          map[string]int // per filter, with the search applied
 	Rows            []store.Row
@@ -71,24 +139,33 @@ func (srv *Server) list(w http.ResponseWriter, r *http.Request, u *store.User) e
 	if err := srv.requireLang(r.Context(), lang); err != nil {
 		return err
 	}
+	file, err := srv.fileFilter(r)
+	if err != nil {
+		return err
+	}
+	files, err := srv.store.Files(r.Context())
+	if err != nil {
+		return err
+	}
 	q := r.URL.Query()
-	d := listData{Lang: lang, Filter: q.Get("filter"), Q: strings.TrimSpace(q.Get("q")), Filters: store.Filters}
+	d := listData{Lang: lang, Filter: q.Get("filter"), Q: strings.TrimSpace(q.Get("q")), Filters: store.Filters,
+		File: file.Name, Labels: len(files) > 1 && file.ID == 0, Chips: fileChips(files, file.Name, "/t/"+lang, q)}
 	if !slices.Contains(store.Filters, d.Filter) {
 		d.Filter = store.FilterTodo
 	}
 	d.Page, _ = strconv.Atoi(q.Get("page"))
 	d.Page = max(d.Page, 1)
-	rows, count, err := srv.store.List(r.Context(), lang, d.Filter, d.Q, (d.Page-1)*pageSize, pageSize)
+	rows, count, err := srv.store.List(r.Context(), file.ID, lang, d.Filter, d.Q, (d.Page-1)*pageSize, pageSize)
 	if err != nil {
 		return err
 	}
-	if d.Counts, err = srv.store.FilterCounts(r.Context(), lang, d.Q); err != nil {
+	if d.Counts, err = srv.store.FilterCounts(r.Context(), file.ID, lang, d.Q); err != nil {
 		return err
 	}
 	if d.Top, err = srv.store.TopContributors(r.Context(), lang, 5); err != nil {
 		return err
 	}
-	stats, err := srv.store.Stats(r.Context())
+	stats, err := srv.store.Stats(r.Context(), file.ID)
 	if err != nil {
 		return err
 	}
@@ -102,8 +179,18 @@ func (srv *Server) list(w http.ResponseWriter, r *http.Request, u *store.User) e
 	return srv.render(w, r, http.StatusOK, "list", u, langName(lang), d)
 }
 
+// keyItem is a line of the editor's key list: a string, after a heading
+// where a new file starts.
+type keyItem struct {
+	store.KeyState
+	Heading string
+}
+
 type editorData struct {
 	Lang, Filter, Q string
+	File            store.File // the string's file
+	FilePath        string     // its path in this language
+	ListFile        string     // the file the list being worked through is limited to; empty for all
 	Entry           *store.Entry
 	Description     string
 	Placeholders    []arb.Placeholder
@@ -114,52 +201,66 @@ type editorData struct {
 	Problems        []string // issues of the current text, shown when opening the editor
 	Conflict        bool
 	ListURL         string
-	NextKey         string
-	Keys            []store.KeyState // the list being worked through, for the side column
-	KeysMatching    int              // Keys minus the current key when it no longer matches
+	Next            store.Ref
+	Keys            []keyItem // the list being worked through, for the side column
+	KeysMatching    int       // Keys minus the current key when it no longer matches
 }
 
-func (srv *Server) editorState(r *http.Request, lang, key string) (*editorData, error) {
+// pathFile returns the file named in the URL path.
+func (srv *Server) pathFile(r *http.Request) (store.File, error) {
+	return srv.store.FileByName(r.Context(), r.PathValue("file"))
+}
+
+func (srv *Server) editorState(r *http.Request, lang string, file store.File, key string) (*editorData, error) {
 	if err := srv.requireLang(r.Context(), lang); err != nil {
 		return nil, err
 	}
-	e, err := srv.store.Entry(r.Context(), lang, key)
+	e, err := srv.store.Entry(r.Context(), file.ID, lang, key)
 	if err != nil {
 		return nil, err
 	}
-	d := &editorData{Lang: lang, Entry: e, Text: e.Text, Base: e.HistoryID, Approved: e.Approved}
+	list, err := srv.fileFilter(r)
+	if err != nil {
+		return nil, err
+	}
+	d := &editorData{Lang: lang, File: file, FilePath: file.Path(lang), ListFile: list.Name, Entry: e, Text: e.Text, Base: e.HistoryID, Approved: e.Approved}
 	d.Filter, d.Q = r.FormValue("filter"), r.FormValue("q")
 	if !slices.Contains(store.Filters, d.Filter) {
 		d.Filter = store.FilterTodo
 	}
 	d.Description, d.Placeholders = arb.Placeholders(e.Meta)
-	v := url.Values{}
-	if d.Filter != store.FilterTodo {
-		v.Set("filter", d.Filter)
+	d.ListURL = listURL(lang, d.Filter, d.Q, d.ListFile) + "#" + file.Name + "/" + key
+	cur := store.Ref{FileID: file.ID, File: file.Name, Key: key}
+	if d.Next, err = srv.store.Next(r.Context(), list.ID, lang, d.Filter, d.Q, cur); err != nil {
+		return nil, err
 	}
-	if d.Q != "" {
-		v.Set("q", d.Q)
-	}
-	d.ListURL = "/t/" + lang
-	if len(v) > 0 {
-		d.ListURL += "?" + v.Encode()
-	}
-	d.ListURL += "#" + key
-	d.NextKey, err = srv.store.Next(r.Context(), lang, d.Filter, d.Q, key, e.Position)
+	keys, err := srv.store.Keys(r.Context(), list.ID, lang, d.Filter, d.Q, cur)
 	if err != nil {
 		return nil, err
 	}
-	d.Keys, err = srv.store.Keys(r.Context(), lang, d.Filter, d.Q, key)
-	for _, k := range d.Keys {
+	multi := false
+	for _, k := range keys {
+		multi = multi || k.FileID != keys[0].FileID
+	}
+	for i, k := range keys {
+		item := keyItem{KeyState: k}
+		if multi && (i == 0 || k.FileID != keys[i-1].FileID) {
+			item.Heading = k.File
+		}
+		d.Keys = append(d.Keys, item)
 		if k.Matches {
 			d.KeysMatching++
 		}
 	}
-	return d, err
+	return d, nil
 }
 
 func (srv *Server) editor(w http.ResponseWriter, r *http.Request, u *store.User) error {
-	d, err := srv.editorState(r, r.PathValue("lang"), r.PathValue("key"))
+	file, err := srv.pathFile(r)
+	if err != nil {
+		return err
+	}
+	d, err := srv.editorState(r, r.PathValue("lang"), file, r.PathValue("key"))
 	if err != nil {
 		return err
 	}
@@ -170,8 +271,34 @@ func (srv *Server) editor(w http.ResponseWriter, r *http.Request, u *store.User)
 	return srv.render(w, r, http.StatusOK, "editor", u, d.Entry.Key+" · "+langName(d.Lang), d)
 }
 
-// editorURL keeps the list filter and search while moving between strings.
-func editorURL(lang, key, filter, q string) string {
+// oldEditor redirects links from before there were several files to the
+// first file that has the key.
+func (srv *Server) oldEditor(w http.ResponseWriter, r *http.Request, u *store.User) error {
+	lang, key := r.PathValue("lang"), r.PathValue("key")
+	if err := srv.requireLang(r.Context(), lang); err != nil {
+		return err
+	}
+	refs, err := srv.store.FindKey(r.Context(), key)
+	if err != nil {
+		return err
+	}
+	if len(refs) == 0 {
+		return notFound()
+	}
+	to := strPath(lang, refs[0].File, key)
+	if r.URL.RawQuery != "" {
+		to += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, to, http.StatusFound)
+	return nil
+}
+
+// listURL is the list with a filter, search and file.
+func listURL(lang, filter, q, file string) string {
+	return "/t/" + lang + listQuery(filter, q, file)
+}
+
+func listQuery(filter, q, file string) string {
 	v := url.Values{}
 	if filter != "" && filter != store.FilterTodo {
 		v.Set("filter", filter)
@@ -179,16 +306,33 @@ func editorURL(lang, key, filter, q string) string {
 	if q != "" {
 		v.Set("q", q)
 	}
-	s := "/t/" + lang + "/" + url.PathEscape(key)
-	if len(v) > 0 {
-		s += "?" + v.Encode()
+	if file != "" {
+		v.Set("file", file)
 	}
-	return s
+	if len(v) == 0 {
+		return ""
+	}
+	return "?" + v.Encode()
+}
+
+// editorURL keeps the list filter, search and file while moving between
+// strings.
+func editorURL(lang, file, key, filter, q, listFile string) string {
+	return strPath(lang, file, key) + listQuery(filter, q, listFile)
+}
+
+// editorBack returns to the editor after a form in it, keeping the list.
+func editorBack(r *http.Request, lang string, file store.File, key string) string {
+	return editorURL(lang, file.Name, key, r.PostFormValue("filter"), r.PostFormValue("q"), r.PostFormValue("file"))
 }
 
 func (srv *Server) save(w http.ResponseWriter, r *http.Request, u *store.User) error {
 	lang, key := r.PathValue("lang"), r.PathValue("key")
-	d, err := srv.editorState(r, lang, key)
+	file, err := srv.pathFile(r)
+	if err != nil {
+		return err
+	}
+	d, err := srv.editorState(r, lang, file, key)
 	if err != nil {
 		return err
 	}
@@ -219,14 +363,14 @@ func (srv *Server) save(w http.ResponseWriter, r *http.Request, u *store.User) e
 			return srv.render(w, r, http.StatusUnprocessableEntity, "editor", u, title, d)
 		}
 	}
-	saved, err := srv.store.Save(r.Context(), lang, key, text, u.ID, base, approval)
+	saved, err := srv.store.Save(r.Context(), file.ID, lang, key, text, u.ID, base, approval)
 	if errors.Is(err, store.ErrConflict) {
 		d.Conflict, d.Base, d.Warns = true, d.Entry.HistoryID, nil
 		return srv.render(w, r, http.StatusConflict, "editor", u, title, d)
 	}
 	if errors.Is(err, store.ErrApproved) {
 		// Approved since the editor was opened.
-		if d, err = srv.editorState(r, lang, key); err != nil {
+		if d, err = srv.editorState(r, lang, file, key); err != nil {
 			return err
 		}
 		d.Text, d.Errors = text, []string{"This translation has been approved in the meantime. Only proofreaders and admins can change it."}
@@ -246,18 +390,22 @@ func (srv *Server) save(w http.ResponseWriter, r *http.Request, u *store.User) e
 		flash = "Saved " + key + "."
 	}
 	if r.PostFormValue("action") == "stay" {
-		return redirect(w, r, editorURL(lang, key, d.Filter, d.Q), flash)
+		return redirect(w, r, editorURL(lang, file.Name, key, d.Filter, d.Q, d.ListFile), flash)
 	}
 	// The next key is looked up after saving: with the "todo" filter the
 	// string just saved no longer matches.
-	next, err := srv.store.Next(r.Context(), lang, d.Filter, d.Q, key, d.Entry.Position)
+	list, err := srv.fileFilter(r)
 	if err != nil {
 		return err
 	}
-	if next == "" {
-		return redirect(w, r, strings.TrimSuffix(d.ListURL, "#"+key), strings.TrimSpace(flash+" Nothing left in this list."))
+	next, err := srv.store.Next(r.Context(), list.ID, lang, d.Filter, d.Q, store.Ref{FileID: file.ID, Key: key})
+	if err != nil {
+		return err
 	}
-	return redirect(w, r, editorURL(lang, next, d.Filter, d.Q), flash)
+	if next.Key == "" {
+		return redirect(w, r, listURL(lang, d.Filter, d.Q, d.ListFile), strings.TrimSpace(flash+" Nothing left in this list."))
+	}
+	return redirect(w, r, editorURL(lang, next.File, next.Key, d.Filter, d.Q, d.ListFile), flash)
 }
 
 func (srv *Server) revert(w http.ResponseWriter, r *http.Request, u *store.User) error {
@@ -265,11 +413,15 @@ func (srv *Server) revert(w http.ResponseWriter, r *http.Request, u *store.User)
 	if err := srv.requireLang(r.Context(), lang); err != nil {
 		return err
 	}
-	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err := srv.store.Revert(r.Context(), lang, key, id, u.ID); err != nil {
+	file, err := srv.pathFile(r)
+	if err != nil {
 		return err
 	}
-	return redirect(w, r, editorURL(lang, key, r.PostFormValue("filter"), r.PostFormValue("q")), "Restored an earlier version.")
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err := srv.store.Revert(r.Context(), file.ID, lang, key, id, u.ID); err != nil {
+		return err
+	}
+	return redirect(w, r, editorBack(r, lang, file, key), "Restored an earlier version.")
 }
 
 func (srv *Server) deleteVersion(w http.ResponseWriter, r *http.Request, u *store.User) error {
@@ -277,16 +429,24 @@ func (srv *Server) deleteVersion(w http.ResponseWriter, r *http.Request, u *stor
 	if err := srv.requireLang(r.Context(), lang); err != nil {
 		return err
 	}
-	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err := srv.store.DeleteVersion(r.Context(), lang, key, id, u); err != nil {
+	file, err := srv.pathFile(r)
+	if err != nil {
 		return err
 	}
-	return redirect(w, r, editorURL(lang, key, r.PostFormValue("filter"), r.PostFormValue("q")), "Deleted a version.")
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err := srv.store.DeleteVersion(r.Context(), file.ID, lang, key, id, u); err != nil {
+		return err
+	}
+	return redirect(w, r, editorBack(r, lang, file, key), "Deleted a version.")
 }
 
 func (srv *Server) useSuggestion(w http.ResponseWriter, r *http.Request, u *store.User) error {
 	lang, key := r.PathValue("lang"), r.PathValue("key")
-	d, err := srv.editorState(r, lang, key)
+	file, err := srv.pathFile(r)
+	if err != nil {
+		return err
+	}
+	d, err := srv.editorState(r, lang, file, key)
 	if err != nil {
 		return err
 	}
@@ -296,13 +456,13 @@ func (srv *Server) useSuggestion(w http.ResponseWriter, r *http.Request, u *stor
 		return notFound()
 	}
 	text := d.Entry.Suggestions[i].Text
-	back := editorURL(lang, key, d.Filter, d.Q)
+	back := editorURL(lang, file.Name, key, d.Filter, d.Q, d.ListFile)
 	if errs, _ := arb.Check(d.Entry.Source, text); len(errs) > 0 {
 		return redirect(w, r, back, "This suggestion can't be used: "+errs[0])
 	}
 	approve := r.PostFormValue("approve") == "1"
 	base, _ := strconv.ParseInt(r.PostFormValue("base"), 10, 64)
-	err = srv.store.UseSuggestion(r.Context(), lang, key, id, u, base, approve)
+	err = srv.store.UseSuggestion(r.Context(), file.ID, lang, key, id, u, base, approve)
 	switch {
 	case errors.Is(err, store.ErrConflict):
 		return redirect(w, r, back, "Someone saved this string in the meantime. Check the current text before using a suggestion.")
@@ -322,17 +482,22 @@ func (srv *Server) dismissSuggestion(w http.ResponseWriter, r *http.Request, u *
 	if err := srv.requireLang(r.Context(), lang); err != nil {
 		return err
 	}
-	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err := srv.store.DismissSuggestion(r.Context(), lang, key, id, u); err != nil {
+	file, err := srv.pathFile(r)
+	if err != nil {
 		return err
 	}
-	return redirect(w, r, editorURL(lang, key, r.PostFormValue("filter"), r.PostFormValue("q")), "Deleted a suggestion.")
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err := srv.store.DismissSuggestion(r.Context(), file.ID, lang, key, id, u); err != nil {
+		return err
+	}
+	return redirect(w, r, editorBack(r, lang, file, key), "Deleted a suggestion.")
 }
 
 type activityData struct {
 	Path  string // the page, for the pager
 	Lang  string // empty for all languages
 	Mine  bool   // only the user's own activity
+	Multi bool   // label lines with their file
 	Items []store.Activity
 	Page  int
 	More  bool
@@ -411,6 +576,11 @@ func (srv *Server) loadActivity(r *http.Request, d *activityData, userID int64) 
 	if err != nil {
 		return err
 	}
+	files, err := srv.store.Files(r.Context())
+	if err != nil {
+		return err
+	}
+	d.Multi = len(files) > 1
 	d.Items, d.More = items[:min(len(items), pageSize)], len(items) > pageSize
 	return nil
 }

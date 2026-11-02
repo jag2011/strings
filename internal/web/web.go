@@ -87,7 +87,9 @@ func New(s *store.Store, external *External) (*Server, error) {
 			}
 			return template.URL("?" + v.Encode())
 		},
-		"esc":      url.PathEscape,
+		"esc": url.PathEscape,
+		// strURL links to a string in the editor.
+		"strURL":   func(lang, file, key string) string { return srv.Base + strPath(lang, file, key) },
 		"static":   func(name string) string { return srv.Base + "/static/" + name + "?v=" + srv.static },
 		"base":     func() string { return srv.Base },
 		"date":     func(s string) template.HTML { return timeTag(s, "date") },
@@ -98,6 +100,9 @@ func New(s *store.Store, external *External) (*Server, error) {
 		"usd":      func(v float64) string { return fmt.Sprintf("$%.2f", v) },
 		"tokens":   tokens,
 		"diff":     diffText,
+		"fileName": path.Base,
+		"contains": strings.Contains,
+		"decision": decisionField,
 		// For the textarea: lang enables the browser's spell checker in the
 		// right language, dir handles right-to-left scripts.
 		"bcp47": func(code string) string { return strings.ReplaceAll(code, "_", "-") },
@@ -154,17 +159,23 @@ func (srv *Server) Handler() http.Handler {
 	view("GET /u/{id}", srv.profile)
 	view("GET /activity", srv.activity)
 	view("GET /t/{lang}", srv.list)
-	view("GET /t/{lang}/{key}", srv.editor)
-	page("POST /t/{lang}/{key}", srv.save)
-	page("POST /t/{lang}/{key}/revert/{id}", srv.revert)
-	page("POST /t/{lang}/{key}/delete/{id}", srv.deleteVersion)
-	page("POST /t/{lang}/{key}/suggestions/{id}/use", srv.useSuggestion)
-	page("POST /t/{lang}/{key}/suggestions/{id}/dismiss", srv.dismissSuggestion)
+	// Links from before there were several files.
+	view("GET /t/{lang}/{key}", srv.oldEditor)
+	view("GET /t/{lang}/{file}/{key}", srv.editor)
+	page("POST /t/{lang}/{file}/{key}", srv.save)
+	page("POST /t/{lang}/{file}/{key}/revert/{id}", srv.revert)
+	page("POST /t/{lang}/{file}/{key}/delete/{id}", srv.deleteVersion)
+	page("POST /t/{lang}/{file}/{key}/suggestions/{id}/use", srv.useSuggestion)
+	page("POST /t/{lang}/{file}/{key}/suggestions/{id}/dismiss", srv.dismissSuggestion)
 
 	admin("GET /admin", srv.adminPage)
 	admin("POST /admin/settings", srv.adminSettings)
 	admin("POST /admin/languages", srv.adminAddLanguage)
 	admin("POST /admin/languages/{lang}/remove", srv.adminRemoveLanguage)
+	admin("POST /admin/files/{id}", srv.adminUpdateFile)
+	admin("POST /admin/files/{id}/up", srv.adminMoveFile)
+	admin("POST /admin/files/{id}/down", srv.adminMoveFile)
+	admin("POST /admin/files/{id}/delete", srv.adminDeleteFile)
 	admin("POST /admin/import", srv.adminImport)
 	admin("GET /admin/import/{id}", srv.adminReview)
 	admin("POST /admin/import/{id}", srv.adminConfirmImport)
@@ -189,16 +200,23 @@ func (srv *Server) Handler() http.Handler {
 	admin("POST /admin/users/{id}/delete-translations", srv.adminDeleteUserVersions)
 	admin("GET /admin/users/{id}/merge", srv.adminMergePage)
 	admin("POST /admin/users/{id}/merge", srv.adminMerge)
-	page("GET /export/{file}", srv.exportFile)
+	page("GET /export/{path...}", srv.exportFile)
 	page("GET /export.zip", srv.exportZip)
 
 	api := http.NewServeMux()
+	api.HandleFunc("GET /api/v1/files", srv.apiFiles)
+	api.HandleFunc("PUT /api/v1/files/{path...}", srv.apiPutFile)
+	api.HandleFunc("GET /api/v1/files/{path...}", srv.apiGetFile)
+	api.HandleFunc("GET /api/v1/files.zip", srv.apiFilesZip)
+	api.HandleFunc("POST /api/v1/preview/{path...}", srv.apiPreview)
+	api.HandleFunc("GET /api/v1/stats", srv.apiStats)
+	// Deprecated: from before there were several files. They refer to the
+	// first file, or match file names in all files.
 	api.HandleFunc("PUT /api/v1/source", srv.apiSource)
 	api.HandleFunc("POST /api/v1/source/preview", srv.apiSourcePreview)
 	api.HandleFunc("PUT /api/v1/translations/{lang}", srv.apiTranslations)
 	api.HandleFunc("GET /api/v1/arb/{file}", srv.apiExport)
 	api.HandleFunc("GET /api/v1/arb.zip", srv.apiExportZip)
-	api.HandleFunc("GET /api/v1/stats", srv.apiStats)
 	api.HandleFunc("GET /api/v1/contributors", srv.apiContributors)
 	mux.Handle("/api/", srv.apiAuth(api))
 
@@ -294,6 +312,8 @@ type pageCtx struct {
 	Title    string
 	User     *store.User
 	Settings map[string]string
+	Files    []store.File
+	Multi    bool // more than one file: show which file strings belong to
 	Flash    string
 	Nav      string
 	Public   bool // visitors can browse without logging in
@@ -305,7 +325,11 @@ func (srv *Server) render(w http.ResponseWriter, r *http.Request, status int, na
 	if err != nil {
 		return err
 	}
-	ctx := pageCtx{Title: title, User: u, Settings: set, Flash: takeFlash(w, r), Data: data, Nav: name, Public: srv.Public}
+	files, err := srv.store.Files(r.Context())
+	if err != nil {
+		return err
+	}
+	ctx := pageCtx{Title: title, User: u, Settings: set, Files: files, Multi: len(files) > 1, Flash: takeFlash(w, r), Data: data, Nav: name, Public: srv.Public}
 	var buf strings.Builder
 	if err := srv.pages[name].ExecuteTemplate(&buf, "layout.html", ctx); err != nil {
 		return err
@@ -363,6 +387,8 @@ func (srv *Server) renderError(w http.ResponseWriter, r *http.Request, u *store.
 		he = httpError{http.StatusConflict, "This translation is approved. Remove the approval first."}
 	} else if errors.Is(err, store.ErrForbidden) {
 		he = httpError{http.StatusForbidden, "You can't do this."}
+	} else if errors.Is(err, store.ErrFileUsed) {
+		he = httpError{http.StatusConflict, "This file has translations, suggestions or AI runs and can't be deleted."}
 	} else if !errors.As(err, &he) {
 		log.Printf("%s %s: %v", r.Method, r.URL.Path, err)
 		he = httpError{http.StatusInternalServerError, "Something went wrong."}

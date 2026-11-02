@@ -6,7 +6,8 @@
 
 <section class="card run" {{if $r.Active}}data-reload="3"{{end}}>
   <dl class="facts">
-    <dt>Language</dt><dd><a href="{{base}}/t/{{$r.Lang}}">{{langName $r.Lang}} ({{$r.Lang}})</a>{{if or $r.Translated $r.Suggested}} · <a href="{{base}}/t/{{$r.Lang}}{{query "filter" "unapproved"}}">review</a>{{end}}</dd>
+    {{$file := ""}}{{if .Multi}}{{$file = $r.FileName}}<dt>File</dt><dd>{{$r.FileName}}</dd>{{end}}
+    <dt>Language</dt><dd><a href="{{base}}/t/{{$r.Lang}}{{query "file" $file}}">{{langName $r.Lang}} ({{$r.Lang}})</a>{{if or $r.Translated $r.Suggested}} · <a href="{{base}}/t/{{$r.Lang}}{{query "filter" "unapproved" "file" $file}}">review</a>{{end}}</dd>
     <dt>AI user</dt><dd><a href="{{base}}/u/{{$r.UserID}}">{{$r.UserName}}</a> · <span class="mono">{{$r.Model}}</span></dd>
     <dt>Strings</dt><dd>{{if eq $r.Input "all"}}All but approved{{else}}Missing{{end}}, {{if $r.Suggest}}as suggestions{{else}}missing ones as translations{{end}}</dd>
     {{with $r.Notes}}<dt>Style notes</dt><dd class="text">{{.}}</dd>{{end}}

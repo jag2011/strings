@@ -12,18 +12,18 @@ import (
 func aiSetup(t *testing.T) (*Store, *User, *User) {
 	t.Helper()
 	s, ctx := open(t), context.Background()
-	if _, err := s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana {n}", "c": "Cherry", "d": "{n, plural, one{# day} other{# days}}"}`), nil); err != nil {
+	if _, err := s.ImportSource(ctx, 1, parse(t, `{"a": "Apple", "b": "Banana {n}", "c": "Cherry", "d": "{n, plural, one{# day} other{# days}}"}`), nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ImportTranslations(ctx, "de", parse(t, `{"b": "Banane {n}"}`)); err != nil {
+	if _, err := s.ImportTranslations(ctx, 1, "de", parse(t, `{"b": "Banane {n}"}`)); err != nil {
 		t.Fatal(err)
 	}
 	admin, _ := s.CreateUser(ctx, "admin@example.com", "Admin", "admin")
-	if _, err := s.Save(ctx, "de", "b", "Banane {n}", admin.ID, -1, Approve); err != nil {
+	if _, err := s.Save(ctx, 1, "de", "b", "Banane {n}", admin.ID, -1, Approve); err != nil {
 		t.Fatal(err)
 	}
 	p, _ := s.CreateUser(ctx, "p@example.com", "P", "translator")
-	if _, err := s.Save(ctx, "de", "c", "Kirsche", p.ID, -1, KeepApproval); err != nil {
+	if _, err := s.Save(ctx, 1, "de", "c", "Kirsche", p.ID, -1, KeepApproval); err != nil {
 		t.Fatal(err)
 	}
 	ai, err := s.CreateAIUser(ctx, "Robo", "anthropic/claude-opus-5.5")
@@ -35,7 +35,7 @@ func aiSetup(t *testing.T) (*Store, *User, *User) {
 
 func pendingKeys(t *testing.T, s *Store, aiID int64, input string) []string {
 	t.Helper()
-	ps, err := s.AIPending(context.Background(), "de", aiID, input)
+	ps, err := s.AIPending(context.Background(), 1, "de", aiID, input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestAIPending(t *testing.T) {
 	if got := pendingKeys(t, s, ai.ID, AIInputAll); !slices.Equal(got, []string{"a", "c", "d"}) {
 		t.Errorf("all, approved b left out: %v", got)
 	}
-	ps, _ := s.AIPending(context.Background(), "de", ai.ID, AIInputAll)
+	ps, _ := s.AIPending(context.Background(), 1, "de", ai.ID, AIInputAll)
 	if c := ps[1]; !c.HasCurrent || c.Current != "Kirsche" {
 		t.Errorf("c: %+v", c)
 	}
@@ -67,11 +67,11 @@ func TestAIFillStats(t *testing.T) {
 	s, ai, p := aiSetup(t)
 	ctx := context.Background()
 	other, _ := s.CreateAIUser(ctx, "Other", "openai/gpt-6")
-	s.Suggest(ctx, "de", "a", "Apfel", other.ID)
-	s.Suggest(ctx, "de", "d", "Tage", p.ID)     // a person's suggestion doesn't count
-	s.Suggest(ctx, "de", "c", "Kirsche", ai.ID) // c isn't missing
+	s.Suggest(ctx, 1, "de", "a", "Apfel", other.ID)
+	s.Suggest(ctx, 1, "de", "d", "Tage", p.ID)     // a person's suggestion doesn't count
+	s.Suggest(ctx, 1, "de", "c", "Kirsche", ai.ID) // c isn't missing
 	s.AddLanguage(ctx, "fr")
-	fill, err := s.AIFillStats(ctx, ai.ID)
+	fill, err := s.AIFillStats(ctx, 1, ai.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,12 +79,12 @@ func TestAIFillStats(t *testing.T) {
 	if !slices.Equal(fill, want) {
 		t.Errorf("before: %+v", fill)
 	}
-	s.Suggest(ctx, "de", "d", "{n, plural, one{# Tag} other{# Tage}}", ai.ID)
-	fill, _ = s.AIFillStats(ctx, ai.ID)
+	s.Suggest(ctx, 1, "de", "d", "{n, plural, one{# Tag} other{# Tage}}", ai.ID)
+	fill, _ = s.AIFillStats(ctx, 1, ai.ID)
 	if f := fill[0]; f.NotByAI != 1 || f.NotByAny != 0 {
 		t.Errorf("after: %+v", f)
 	}
-	if fill, _ = s.AIFillStats(ctx, other.ID); fill[0].NotByAI != 1 {
+	if fill, _ = s.AIFillStats(ctx, 1, other.ID); fill[0].NotByAI != 1 {
 		t.Errorf("other: %+v", fill[0])
 	}
 }
@@ -92,7 +92,7 @@ func TestAIFillStats(t *testing.T) {
 func TestAISaveRules(t *testing.T) {
 	s, ai, p := aiSetup(t)
 	ctx := context.Background()
-	missing := AISaveJob{Lang: "de", AIUserID: ai.ID, Input: AIInputMissing}
+	missing := AISaveJob{File: 1, Lang: "de", AIUserID: ai.ID, Input: AIInputMissing}
 	res, err := s.AISave(ctx, missing, []AIText{
 		{"a", "Apfel"},
 		{"b", "Bananen {n}"},
@@ -123,7 +123,7 @@ func TestAISaveRules(t *testing.T) {
 	}
 
 	// With "all", existing translations get suggestions, never new text.
-	all := AISaveJob{Lang: "de", AIUserID: ai.ID, Input: AIInputAll}
+	all := AISaveJob{File: 1, Lang: "de", AIUserID: ai.ID, Input: AIInputAll}
 	res, _ = s.AISave(ctx, all, []AIText{{"c", "Kirsche!"}, {"b", "Bananen {n}"}, {"a", "Apfel"}})
 	if res[0].Result != AISuggested || res[1].Result != AIError || res[2].Result != AISame {
 		t.Errorf("all: %+v", res)
@@ -137,8 +137,8 @@ func TestAISaveRules(t *testing.T) {
 	}
 
 	// Suggestions only: a missing string stays missing.
-	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana {n}", "c": "Cherry", "d": "{n, plural, one{# day} other{# days}}", "e": "Elder {x}"}`), nil)
-	res, _ = s.AISave(ctx, AISaveJob{Lang: "de", AIUserID: ai.ID, Input: AIInputMissing, Suggest: true}, []AIText{{"e", "Holunder {y}"}, {"e", "Holunder"}})
+	s.ImportSource(ctx, 1, parse(t, `{"a": "Apple", "b": "Banana {n}", "c": "Cherry", "d": "{n, plural, one{# day} other{# days}}", "e": "Elder {x}"}`), nil)
+	res, _ = s.AISave(ctx, AISaveJob{File: 1, Lang: "de", AIUserID: ai.ID, Input: AIInputMissing, Suggest: true}, []AIText{{"e", "Holunder {y}"}, {"e", "Holunder"}})
 	if res[0].Result != AIError || res[1].Result != AISuggested || len(res[1].Warnings) == 0 {
 		t.Errorf("suggest: %+v", res)
 	}
@@ -147,7 +147,7 @@ func TestAISaveRules(t *testing.T) {
 	}
 
 	// Only AI users.
-	if _, err := s.AISave(ctx, AISaveJob{Lang: "de", AIUserID: p.ID, Input: AIInputMissing}, []AIText{{"e", "Holunder {x}"}}); err == nil {
+	if _, err := s.AISave(ctx, AISaveJob{File: 1, Lang: "de", AIUserID: p.ID, Input: AIInputMissing}, []AIText{{"e", "Holunder {x}"}}); err == nil {
 		t.Error("a person saved as an AI user")
 	}
 }
@@ -155,7 +155,7 @@ func TestAISaveRules(t *testing.T) {
 func TestAILookup(t *testing.T) {
 	s, ai, _ := aiSetup(t)
 	ctx := context.Background()
-	s.AISave(ctx, AISaveJob{Lang: "de", AIUserID: ai.ID, Input: AIInputMissing}, []AIText{{"a", "Bananenapfel"}})
+	s.AISave(ctx, AISaveJob{File: 1, Lang: "de", AIUserID: ai.ID, Input: AIInputMissing}, []AIText{{"a", "Bananenapfel"}})
 	ms, err := s.AILookup(ctx, "de", "banan", 10)
 	if err != nil {
 		t.Fatal(err)
@@ -168,10 +168,10 @@ func TestAILookup(t *testing.T) {
 func TestAIRunStates(t *testing.T) {
 	s, ai, p := aiSetup(t)
 	ctx := context.Background()
-	if _, err := s.CreateAIRun(ctx, AIRun{Lang: "de", UserID: p.ID, Input: AIInputMissing, MaxCost: 1}); !errors.Is(err, ErrNotFound) {
+	if _, err := s.CreateAIRun(ctx, AIRun{FileID: 1, Lang: "de", UserID: p.ID, Input: AIInputMissing, MaxCost: 1}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("run for a person: %v", err)
 	}
-	r, err := s.CreateAIRun(ctx, AIRun{Lang: "de", UserID: ai.ID, StartedBy: p.ID, Input: AIInputAll, Suggest: true, Notes: " du ", MaxCost: 5})
+	r, err := s.CreateAIRun(ctx, AIRun{FileID: 1, Lang: "de", UserID: ai.ID, StartedBy: p.ID, Input: AIInputAll, Suggest: true, Notes: " du ", MaxCost: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestAIRunStates(t *testing.T) {
 		t.Errorf("restarted a done run: %v", err)
 	}
 
-	q, _ := s.CreateAIRun(ctx, AIRun{Lang: "de", UserID: ai.ID, Input: AIInputMissing, MaxCost: 5})
+	q, _ := s.CreateAIRun(ctx, AIRun{FileID: 1, Lang: "de", UserID: ai.ID, Input: AIInputMissing, MaxCost: 5})
 	if ok, err := s.CancelQueuedAIRun(ctx, q.ID); !ok || err != nil {
 		t.Errorf("cancel queued: %v %v", ok, err)
 	}

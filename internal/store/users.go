@@ -202,7 +202,8 @@ func (s *Store) MergeUser(ctx context.Context, from, into int64) error {
 			"UPDATE ai_runs SET started_by = ?1 WHERE started_by = ?2",
 			// Of two suggestions for the same string, the newer one stays.
 			`DELETE FROM suggestions WHERE user_id = ?1 AND EXISTS (SELECT 1 FROM suggestions f
-				WHERE f.user_id = ?2 AND f.lang = suggestions.lang AND f.key = suggestions.key AND f.created_at >= suggestions.created_at)`,
+				WHERE f.user_id = ?2 AND f.lang = suggestions.lang AND f.file_id = suggestions.file_id AND f.key = suggestions.key
+				AND f.created_at >= suggestions.created_at)`,
 			"UPDATE OR IGNORE suggestions SET user_id = ?1 WHERE user_id = ?2",
 			"DELETE FROM suggestions WHERE user_id = ?2",
 			"DELETE FROM users WHERE id = ?2",

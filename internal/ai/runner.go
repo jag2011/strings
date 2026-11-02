@@ -145,6 +145,20 @@ func (r *Runner) loop(ctx context.Context) {
 func (r *Runner) do(ctx context.Context, run *store.AIRun) {
 	j := &job{run: run, st: r.store, langName: r.LangName(run.Lang), offered: map[string]bool{}, failed: map[string]bool{}}
 	j.prompt = DefaultPrompt
+	j.log = func(ctx context.Context, format string, args ...any) {
+		// Logged even while shutting down, so the log shows the last steps.
+		if err := r.store.AddAIRunEvent(context.WithoutCancel(ctx), run.ID, fmt.Sprintf(format, args...)); err != nil {
+			log.Printf("ai: run %d: %v", run.ID, err)
+		}
+	}
+	var err error
+	if j.file, err = r.store.File(ctx, run.FileID); err != nil {
+		j.log(ctx, "failed: %v", err)
+		if err := r.store.FinishAIRun(context.WithoutCancel(ctx), run.ID, store.AIFailed, "", err.Error()); err != nil {
+			log.Printf("ai: run %d: %v", run.ID, err)
+		}
+		return
+	}
 	if set, err := r.store.Settings(ctx); err == nil {
 		j.sourceName = r.LangName(set["source_lang"])
 		if p := set["ai_prompt"]; p != "" {
@@ -153,12 +167,6 @@ func (r *Runner) do(ctx context.Context, run *store.AIRun) {
 	}
 	if err := r.store.SetAIRunPrompt(ctx, run.ID, systemPrompt(j)); err != nil {
 		log.Printf("ai: run %d: %v", run.ID, err)
-	}
-	j.log = func(ctx context.Context, format string, args ...any) {
-		// Logged even while shutting down, so the log shows the last steps.
-		if err := r.store.AddAIRunEvent(context.WithoutCancel(ctx), run.ID, fmt.Sprintf(format, args...)); err != nil {
-			log.Printf("ai: run %d: %v", run.ID, err)
-		}
 	}
 	if run.Steps > 0 {
 		j.log(ctx, "started again with %s", run.Model)
@@ -170,7 +178,7 @@ func (r *Runner) do(ctx context.Context, run *store.AIRun) {
 		status, msg = store.AIInterrupted, "The server stopped during the run. Start it again to continue."
 	}
 	bg := context.WithoutCancel(ctx)
-	pending, err := r.store.AIPending(bg, run.Lang, run.UserID, run.Input)
+	pending, err := r.store.AIPending(bg, run.FileID, run.Lang, run.UserID, run.Input)
 	if err == nil {
 		j.log(bg, "%s; %d %s still to do", status, len(pending), plural(len(pending), "string", "strings"))
 	}

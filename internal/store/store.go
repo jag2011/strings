@@ -1,4 +1,5 @@
-// Package store keeps all data in one SQLite file. One database is one project.
+// Package store keeps all data in one SQLite file. One database is one
+// project, which can have several source files.
 package store
 
 import (
@@ -29,7 +30,11 @@ type Store struct {
 	r *sql.DB
 }
 
-func Open(path string) (*Store, error) {
+func Open(path string) (*Store, error) { return openUpTo(path, 0) }
+
+// openUpTo opens the database migrated up to a schema version (0 for all),
+// for testing migrations.
+func openUpTo(path string, version int) (*Store, error) {
 	q := url.Values{}
 	for _, p := range []string{"journal_mode(WAL)", "busy_timeout(5000)", "foreign_keys(1)", "synchronous(NORMAL)"} {
 		q.Add("_pragma", p)
@@ -47,7 +52,7 @@ func Open(path string) (*Store, error) {
 	}
 	r.SetMaxOpenConns(8)
 	s := &Store{w: w, r: r}
-	if err := s.migrate(); err != nil {
+	if err := s.migrate(version); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -72,10 +77,11 @@ func (s *Store) Ping(ctx context.Context) error {
 	return s.r.QueryRowContext(ctx, "SELECT 1").Scan(&one)
 }
 
-// migrate applies schema/NNN_*.sql files newer than PRAGMA user_version.
-// Foreign keys are off while migrating, so migrations can rebuild tables
-// (sqlite.org/lang_altertable.html); violations are checked before commit.
-func (s *Store) migrate() error {
+// migrate applies schema/NNN_*.sql files newer than PRAGMA user_version, up
+// to version upTo (0 for all). Foreign keys are off while migrating, so
+// migrations can rebuild tables (sqlite.org/lang_altertable.html);
+// violations are checked before commit.
+func (s *Store) migrate(upTo int) error {
 	ctx := context.Background()
 	c, err := s.w.Conn(ctx) // PRAGMA foreign_keys is per connection
 	if err != nil {
@@ -97,7 +103,7 @@ func (s *Store) migrate() error {
 		if err != nil {
 			return fmt.Errorf("migration %s: bad name", f)
 		}
-		if n <= version {
+		if n <= version || (upTo > 0 && n > upTo) {
 			continue
 		}
 		body, _ := schemaFS.ReadFile(f)
@@ -145,16 +151,13 @@ func (s *Store) tx(ctx context.Context, fn func(*sql.Tx) error) error {
 	return tx.Commit()
 }
 
-// Settings with their defaults.
+// Settings with their defaults. What describes a source file is kept per
+// file, see File.
 var defaults = map[string]string{
-	"name":                 "Strings",
-	"accent":               "#2f6fde",
-	"source_lang":          "en",
-	"file_prefix":          "intl_",
-	"arb_locale":           "0", // write "@@locale" into exports
-	"arb_trailing_newline": "0",
-	"source_revision":      "0", // counts source imports that changed something
-	"ai_prompt":            "",  // the AI system prompt; empty for the built-in one
+	"name":        "Strings",
+	"accent":      "#2f6fde",
+	"source_lang": "en",
+	"ai_prompt":   "", // the AI system prompt; empty for the built-in one
 }
 
 func (s *Store) Settings(ctx context.Context) (map[string]string, error) {

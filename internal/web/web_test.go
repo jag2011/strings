@@ -49,7 +49,10 @@ func setupWith(t *testing.T, external *External, opts ...func(*Server)) *env {
 
 	ctx := context.Background()
 	f, _ := arb.Parse([]byte(`{"hello": "Hello {name}!", "@hello": {"description": "Greeting"}, "bye": "Bye", "items": "{n, plural, one{# item} other{# items}}"}`))
-	s.ImportSource(ctx, f, nil)
+	// One file, as after migrating an instance from before there were several.
+	if _, _, err := s.ImportNewSource(ctx, store.File{Template: "intl_{locale}.arb", Name: "intl"}, f); err != nil {
+		t.Fatal(err)
+	}
 	s.AddLanguage(ctx, "de")
 	return &env{t: t, store: s, srv: ts, base: w.Base}
 }
@@ -101,7 +104,7 @@ func TestProfile(t *testing.T) {
 	admin := e.user("admin@example.com", "admin") // id 1
 	tr := e.user("tr@example.com", "translator")  // id 2
 	ctx := context.Background()
-	e.store.Save(ctx, "de", "hello", "Hallo {name}!", 2, -1, store.KeepApproval)
+	e.store.Save(ctx, 1, "de", "hello", "Hallo {name}!", 2, -1, store.KeepApproval)
 
 	if res, _ := e.get(tr, "/account"); res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/u/2" {
 		t.Errorf("/account: %d %s", res.StatusCode, res.Header.Get("Location"))
@@ -128,7 +131,7 @@ func TestProfile(t *testing.T) {
 		t.Errorf("missing user: %d", res.StatusCode)
 	}
 	// Names link to profiles.
-	if _, body := e.get(tr, "/t/de/hello"); !strings.Contains(body, `<a href="/u/2">tr</a>`) {
+	if _, body := e.get(tr, "/t/de/intl/hello"); !strings.Contains(body, `<a href="/u/2">tr</a>`) {
 		t.Error("editor doesn't link the translator")
 	}
 
@@ -142,14 +145,14 @@ func TestProfile(t *testing.T) {
 	if _, body := e.get(admin, "/u/2"); !strings.Contains(body, "Delete all for language") {
 		t.Error("admin doesn't see the delete buttons")
 	}
-	e.store.Suggest(ctx, "de", "bye", "Tschüss", 2)
+	e.store.Suggest(ctx, 1, "de", "bye", "Tschüss", 2)
 	if res := e.post(admin, "/admin/users/2/delete-translations", url.Values{"scope": {"lang"}, "lang": {"de"}}); res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/u/2" {
 		t.Errorf("deleting: %d %s", res.StatusCode, res.Header.Get("Location"))
 	}
-	if en, _ := e.store.Entry(ctx, "de", "hello"); en.Has {
+	if en, _ := e.store.Entry(ctx, 1, "de", "hello"); en.Has {
 		t.Error("translation not deleted")
 	}
-	if en, _ := e.store.Entry(ctx, "de", "bye"); len(en.Suggestions) != 0 {
+	if en, _ := e.store.Entry(ctx, 1, "de", "bye"); len(en.Suggestions) != 0 {
 		t.Error("suggestion not deleted")
 	}
 }
@@ -157,13 +160,13 @@ func TestProfile(t *testing.T) {
 func TestPagesRender(t *testing.T) {
 	e := setup(t)
 	c := e.user("admin@example.com", "admin")
-	for _, p := range []string{"/", "/t/de", "/t/de?filter=all&q=hel", "/t/de/hello", "/u/1", "/admin", "/admin/users", "/export/intl_de.arb"} {
+	for _, p := range []string{"/", "/t/de", "/t/de?filter=all&q=hel", "/t/de/intl/hello", "/u/1", "/admin", "/admin/users", "/export/intl_de.arb"} {
 		res, body := e.get(c, p)
 		if res.StatusCode != 200 {
 			t.Errorf("GET %s: %d\n%s", p, res.StatusCode, body)
 		}
 	}
-	_, body := e.get(c, "/t/de/hello")
+	_, body := e.get(c, "/t/de/intl/hello")
 	for _, want := range []string{"Hello {name}!", "Greeting", `lang="de"`, "data-save-next"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("editor misses %q", want)
@@ -195,9 +198,9 @@ func TestLoginRequired(t *testing.T) {
 func TestPublic(t *testing.T) {
 	e := setupWith(t, nil, func(s *Server) { s.Public = true })
 	e.user("tr@example.com", "translator") // id 1
-	e.store.Save(context.Background(), "de", "hello", "Hallo {name}!", 1, -1, store.KeepApproval)
+	e.store.Save(context.Background(), 1, "de", "hello", "Hallo {name}!", 1, -1, store.KeepApproval)
 	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	for _, p := range []string{"/", "/t/de", "/t/de/hello", "/t/de/bye", "/activity", "/u/1"} {
+	for _, p := range []string{"/", "/t/de", "/t/de/intl/hello", "/t/de/intl/bye", "/activity", "/u/1"} {
 		res, body := e.get(c, p)
 		if res.StatusCode != 200 {
 			t.Errorf("GET %s: %d\n%s", p, res.StatusCode, body)
@@ -206,7 +209,7 @@ func TestPublic(t *testing.T) {
 			t.Errorf("GET %s shows a form or an email to a visitor", p)
 		}
 	}
-	if _, body := e.get(c, "/t/de/hello"); !strings.Contains(body, "Hallo {name}!") || !strings.Contains(body, "Log in to translate") {
+	if _, body := e.get(c, "/t/de/intl/hello"); !strings.Contains(body, "Hallo {name}!") || !strings.Contains(body, "Log in to translate") {
 		t.Errorf("read-only editor:\n%s", body)
 	}
 	for _, p := range []string{"/account", "/admin", "/export/intl_de.arb"} {
@@ -214,10 +217,10 @@ func TestPublic(t *testing.T) {
 			t.Errorf("GET %s: %d, want a redirect to log in", p, res.StatusCode)
 		}
 	}
-	if res := e.post(c, "/t/de/hello", url.Values{"text": {"Hi {name}!"}, "base": {"-1"}}); res.StatusCode != http.StatusSeeOther {
+	if res := e.post(c, "/t/de/intl/hello", url.Values{"text": {"Hi {name}!"}, "base": {"-1"}}); res.StatusCode != http.StatusSeeOther {
 		t.Errorf("visitor save: %d", res.StatusCode)
 	}
-	if en, _ := e.store.Entry(context.Background(), "de", "hello"); en.Text != "Hallo {name}!" {
+	if en, _ := e.store.Entry(context.Background(), 1, "de", "hello"); en.Text != "Hallo {name}!" {
 		t.Errorf("visitor changed the text to %q", en.Text)
 	}
 }
@@ -227,35 +230,35 @@ func TestTranslateFlow(t *testing.T) {
 	c := e.user("tr@example.com", "translator")
 
 	// Broken placeholder: error, nothing saved.
-	res := e.post(c, "/t/de/hello", url.Values{"text": {"Hallo {nam}!"}, "base": {"0"}})
+	res := e.post(c, "/t/de/intl/hello", url.Values{"text": {"Hallo {nam}!"}, "base": {"0"}})
 	if res.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("invalid: %d", res.StatusCode)
 	}
 	// Valid: saved, on to the next todo string in source order.
-	res = e.post(c, "/t/de/hello", url.Values{"text": {"Hallo {name}!"}, "base": {"0"}})
-	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/t/de/bye" {
+	res = e.post(c, "/t/de/intl/hello", url.Values{"text": {"Hallo {name}!"}, "base": {"0"}})
+	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/t/de/intl/bye" {
 		t.Fatalf("save: %d %s", res.StatusCode, res.Header.Get("Location"))
 	}
 	// A second editor based on the old state gets a conflict.
-	if res := e.post(c, "/t/de/hello", url.Values{"text": {"Hi {name}!"}, "base": {"0"}}); res.StatusCode != http.StatusConflict {
+	if res := e.post(c, "/t/de/intl/hello", url.Values{"text": {"Hi {name}!"}, "base": {"0"}}); res.StatusCode != http.StatusConflict {
 		t.Fatalf("conflict: %d", res.StatusCode)
 	}
 	// Warnings need confirmation. CRLF from the browser is stored as LF.
-	if res := e.post(c, "/t/de/bye", url.Values{"text": {"Tschüss\r\nund weg"}, "base": {"0"}}); res.StatusCode != http.StatusUnprocessableEntity {
+	if res := e.post(c, "/t/de/intl/bye", url.Values{"text": {"Tschüss\r\nund weg"}, "base": {"0"}}); res.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("warning: %d", res.StatusCode)
 	}
-	res = e.post(c, "/t/de/bye", url.Values{"text": {"Tschüss\r\nund weg"}, "base": {"0"}, "force": {"1"}})
+	res = e.post(c, "/t/de/intl/bye", url.Values{"text": {"Tschüss\r\nund weg"}, "base": {"0"}, "force": {"1"}})
 	if res.StatusCode != http.StatusSeeOther {
 		t.Fatalf("force: %d", res.StatusCode)
 	}
-	if en, _ := e.store.Entry(context.Background(), "de", "bye"); en.Text != "Tschüss\nund weg" {
+	if en, _ := e.store.Entry(context.Background(), 1, "de", "bye"); en.Text != "Tschüss\nund weg" {
 		t.Errorf("stored %q", en.Text)
 	}
 	// Plural with Czech-like extra categories is fine; losing the plural is not.
-	if res := e.post(c, "/t/de/items", url.Values{"text": {"{n} Dinge"}, "base": {"0"}}); res.StatusCode != http.StatusUnprocessableEntity {
+	if res := e.post(c, "/t/de/intl/items", url.Values{"text": {"{n} Dinge"}, "base": {"0"}}); res.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("plural lost: %d", res.StatusCode)
 	}
-	res = e.post(c, "/t/de/items", url.Values{"text": {"{n, plural, one{# Ding} few{# Dinge} other{# Dinge}}"}, "base": {"0"}})
+	res = e.post(c, "/t/de/intl/items", url.Values{"text": {"{n, plural, one{# Ding} few{# Dinge} other{# Dinge}}"}, "base": {"0"}})
 	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/t/de" {
 		t.Fatalf("last todo string should go back to the list: %d %s", res.StatusCode, res.Header.Get("Location"))
 	}
@@ -272,49 +275,49 @@ func TestApprovalFlow(t *testing.T) {
 	tr := e.user("tr@example.com", "translator")
 	pr := e.user("pr@example.com", "proofreader")
 	approved := func() bool {
-		en, _ := e.store.Entry(ctx, "de", "bye")
+		en, _ := e.store.Entry(ctx, 1, "de", "bye")
 		return en.Approved
 	}
 	base := func() string {
-		en, _ := e.store.Entry(ctx, "de", "bye")
+		en, _ := e.store.Entry(ctx, 1, "de", "bye")
 		return fmt.Sprint(en.HistoryID)
 	}
 
 	// Translators can't approve; the checkbox is ignored.
-	if res := e.post(tr, "/t/de/bye", url.Values{"text": {"Tschüss"}, "base": {"0"}, "approved": {"1"}}); res.StatusCode != http.StatusSeeOther || approved() {
+	if res := e.post(tr, "/t/de/intl/bye", url.Values{"text": {"Tschüss"}, "base": {"0"}, "approved": {"1"}}); res.StatusCode != http.StatusSeeOther || approved() {
 		t.Fatalf("translator approve: %d %v", res.StatusCode, approved())
 	}
-	if _, body := e.get(tr, "/t/de/bye"); strings.Contains(body, `name="approved"`) {
+	if _, body := e.get(tr, "/t/de/intl/bye"); strings.Contains(body, `name="approved"`) {
 		t.Error("translators get no checkbox")
 	}
 	// Proofreaders can, without changing the text.
-	if res := e.post(pr, "/t/de/bye", url.Values{"text": {"Tschüss"}, "base": {base()}, "approved": {"1"}, "action": {"stay"}}); res.StatusCode != http.StatusSeeOther || !approved() {
+	if res := e.post(pr, "/t/de/intl/bye", url.Values{"text": {"Tschüss"}, "base": {base()}, "approved": {"1"}, "action": {"stay"}}); res.StatusCode != http.StatusSeeOther || !approved() {
 		t.Fatalf("approve: %d %v", res.StatusCode, approved())
 	}
 	if _, body := e.get(tr, "/t/de?filter=all"); !strings.Contains(body, `aria-label="approved"`) {
 		t.Error("list shows no checkmark")
 	}
-	if _, body := e.get(tr, "/t/de?filter=unapproved"); strings.Contains(body, `id="bye"`) {
+	if _, body := e.get(tr, "/t/de?filter=unapproved"); strings.Contains(body, `id="intl/bye"`) {
 		t.Error("approved string in the unapproved filter")
 	}
 
 	// Now translators can't edit it.
-	_, body := e.get(tr, "/t/de/bye")
+	_, body := e.get(tr, "/t/de/intl/bye")
 	if !strings.Contains(body, "readonly") || strings.Contains(body, "data-save-next") {
 		t.Error("translator editor should be read-only")
 	}
-	if res := e.post(tr, "/t/de/bye", url.Values{"text": {"Ciao"}, "base": {base()}}); res.StatusCode != http.StatusConflict {
+	if res := e.post(tr, "/t/de/intl/bye", url.Values{"text": {"Ciao"}, "base": {base()}}); res.StatusCode != http.StatusConflict {
 		t.Errorf("translator edit approved: %d", res.StatusCode)
 	}
 	// A proofreader whose editor didn't show the approval doesn't undo it.
-	if res := e.post(pr, "/t/de/bye", url.Values{"text": {"Ciao"}, "base": {base()}}); res.StatusCode != http.StatusConflict || !approved() {
+	if res := e.post(pr, "/t/de/intl/bye", url.Values{"text": {"Ciao"}, "base": {base()}}); res.StatusCode != http.StatusConflict || !approved() {
 		t.Errorf("stale proofreader edit: %d", res.StatusCode)
 	}
 	// Unchecking removes the approval, and the text can change with it.
-	if res := e.post(pr, "/t/de/bye", url.Values{"text": {"Ciao"}, "base": {base()}, "was_approved": {"1"}, "action": {"stay"}}); res.StatusCode != http.StatusSeeOther || approved() {
+	if res := e.post(pr, "/t/de/intl/bye", url.Values{"text": {"Ciao"}, "base": {base()}, "was_approved": {"1"}, "action": {"stay"}}); res.StatusCode != http.StatusSeeOther || approved() {
 		t.Fatalf("unapprove: %d %v", res.StatusCode, approved())
 	}
-	if en, _ := e.store.Entry(ctx, "de", "bye"); en.Text != "Ciao" {
+	if en, _ := e.store.Entry(ctx, 1, "de", "bye"); en.Text != "Ciao" {
 		t.Errorf("text %q", en.Text)
 	}
 
@@ -343,7 +346,7 @@ func TestApprovalFlow(t *testing.T) {
 func TestCrossOriginPostRejected(t *testing.T) {
 	e := setup(t)
 	c := e.user("tr@example.com", "translator")
-	req, _ := http.NewRequest("POST", e.srv.URL+"/t/de/hello", strings.NewReader("text=x&base=0"))
+	req, _ := http.NewRequest("POST", e.srv.URL+"/t/de/intl/hello", strings.NewReader("text=x&base=0"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Sec-Fetch-Site", "cross-site")
 	res, err := c.Do(req)
@@ -445,7 +448,7 @@ func TestImportReview(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	c := e.user("admin@example.com", "admin")
-	e.store.ImportTranslations(ctx, "de", mustParse(t, `{"hello": "Hallo {name}!", "bye": "Tschüss"}`))
+	e.store.ImportTranslations(ctx, 1, "de", mustParse(t, `{"hello": "Hallo {name}!", "bye": "Tschüss"}`))
 
 	// Translation files alone are imported right away.
 	if res := e.upload(c, map[string]string{"intl_fr.arb": `{"bye": "Salut"}`}); res.StatusCode != 200 {
@@ -460,19 +463,19 @@ func TestImportReview(t *testing.T) {
 		t.Fatalf("upload: %d %s", res.StatusCode, review)
 	}
 	_, body := e.get(c, review)
-	for _, want := range []string{"1 → 2", "Hello<ins>,</ins> {name}!", `name="t.hello" value="keep" checked`, "intl_de.arb"} {
+	for _, want := range []string{"1 → 2", "Hello<ins>,</ins> {name}!", `name="t.1.hello" value="keep" checked`, "intl_de.arb"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("review misses %q", want)
 		}
 	}
-	if en, _ := e.store.Entry(ctx, "de", "hello"); en.Source != "Hello {name}!" {
+	if en, _ := e.store.Entry(ctx, 1, "de", "hello"); en.Source != "Hello {name}!" {
 		t.Fatal("nothing is imported before confirming")
 	}
 
 	// Stale: someone imported the source in between.
 	other := e.upload(c, map[string]string{"intl_en.arb": src}).Header.Get("Location")
-	e.post(c, other, url.Values{"revision": {"1"}})
-	if res := e.post(c, review, url.Values{"revision": {"1"}}); res.StatusCode != http.StatusConflict {
+	e.post(c, other, url.Values{"state": {"1:1"}})
+	if res := e.post(c, review, url.Values{"state": {"1:1"}}); res.StatusCode != http.StatusConflict {
 		t.Errorf("stale review: %d", res.StatusCode)
 	}
 
@@ -489,23 +492,23 @@ func TestImportReviewDecisions(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	c := e.user("admin@example.com", "admin")
-	e.store.ImportTranslations(ctx, "de", mustParse(t, `{"hello": "Hallo {name}!", "bye": "Tschüss"}`))
+	e.store.ImportTranslations(ctx, 1, "de", mustParse(t, `{"hello": "Hallo {name}!", "bye": "Tschüss"}`))
 
 	review := e.upload(c, map[string]string{
 		"intl_en.arb": `{"hello": "Hello, {name}!", "bye": "Goodbye", "new": "New"}`,
 		"intl_de.arb": `{"new": "Neu"}`,
 	}).Header.Get("Location")
-	res := e.post(c, review, url.Values{"revision": {"1"}, "t.hello": {"keep"}, "t.bye": {"remove"}})
+	res := e.post(c, review, url.Values{"state": {"1:1"}, "t.1.hello": {"keep"}, "t.1.bye": {"remove"}})
 	if res.StatusCode != 200 {
 		t.Fatalf("confirm: %d", res.StatusCode)
 	}
-	if en, _ := e.store.Entry(ctx, "de", "hello"); en.Outdated || en.Source != "Hello, {name}!" {
+	if en, _ := e.store.Entry(ctx, 1, "de", "hello"); en.Outdated || en.Source != "Hello, {name}!" {
 		t.Errorf("hello kept: %+v", en.Row)
 	}
-	if en, _ := e.store.Entry(ctx, "de", "bye"); en.Has {
+	if en, _ := e.store.Entry(ctx, 1, "de", "bye"); en.Has {
 		t.Errorf("bye removed: %+v", en.Row)
 	}
-	if en, _ := e.store.Entry(ctx, "de", "new"); en.Text != "Neu" {
+	if en, _ := e.store.Entry(ctx, 1, "de", "new"); en.Text != "Neu" {
 		t.Errorf("translation file imported after the source: %+v", en.Row)
 	}
 	if res, _ := e.get(c, review); res.StatusCode != 404 {
@@ -652,7 +655,7 @@ func TestMergeUser(t *testing.T) {
 	ctx := context.Background()
 	admin := e.user("admin@example.com", "admin")
 	old, _ := e.store.CreateUser(ctx, "old@crowdin.invalid", "Old", "translator")
-	e.store.Save(ctx, "de", "bye", "Tschüss", old.ID, -1, store.KeepApproval)
+	e.store.Save(ctx, 1, "de", "bye", "Tschüss", old.ID, -1, store.KeepApproval)
 	users, _ := e.store.Users(ctx)
 	var me *store.User
 	for _, u := range users {
@@ -782,7 +785,7 @@ func TestBasePath(t *testing.T) {
 		}
 	}
 
-	res = e.post(c, "/t/de/hello", url.Values{"text": {"Hallo {name}!"}})
+	res = e.post(c, "/t/de/intl/hello", url.Values{"text": {"Hallo {name}!"}})
 	if loc := res.Header.Get("Location"); !strings.HasPrefix(loc, "/strings/t/de") {
 		t.Errorf("save redirects to %q", loc)
 	}
@@ -823,41 +826,41 @@ func TestSuggestionsFlow(t *testing.T) {
 		t.Errorf("invite link for an AI user: %d", res.StatusCode)
 	}
 
-	e.store.Suggest(ctx, "de", "hello", "Hallo {name}!", ai.ID)
-	e.store.Suggest(ctx, "de", "bye", "Tschüss {oops}", ai.ID)
+	e.store.Suggest(ctx, 1, "de", "hello", "Hallo {name}!", ai.ID)
+	e.store.Suggest(ctx, 1, "de", "bye", "Tschüss {oops}", ai.ID)
 	if _, body := e.get(tr, "/t/de?filter=all"); !strings.Contains(body, "1 suggestion</span>") {
 		t.Error("list shows no suggestion tag")
 	}
-	_, body := e.get(tr, "/t/de/hello")
+	_, body := e.get(tr, "/t/de/intl/hello")
 	if !strings.Contains(body, "Hallo {name}!") || !strings.Contains(body, ">Use</button>") || strings.Contains(body, "Use &amp; approve") {
 		t.Error("editor suggestions for translators")
 	}
 
 	id := entrySuggestion(t, e, "hello")
-	if res := e.post(tr, fmt.Sprintf("/t/de/hello/suggestions/%d/use", id), url.Values{"base": {"0"}}); res.StatusCode != http.StatusSeeOther {
+	if res := e.post(tr, fmt.Sprintf("/t/de/intl/hello/suggestions/%d/use", id), url.Values{"base": {"0"}}); res.StatusCode != http.StatusSeeOther {
 		t.Fatalf("use: %d", res.StatusCode)
 	}
-	if en, _ := e.store.Entry(ctx, "de", "hello"); en.Text != "Hallo {name}!" || en.UserID != ai.ID || en.Origin != "machine" {
+	if en, _ := e.store.Entry(ctx, 1, "de", "hello"); en.Text != "Hallo {name}!" || en.UserID != ai.ID || en.Origin != "machine" {
 		t.Errorf("used: %+v", en.Row)
 	}
 	// One the same as the current translation is greyed out and can only be deleted.
-	e.store.Suggest(ctx, "de", "hello", "Hallo {name}!", ai.ID)
-	if _, body := e.get(admin, "/t/de/hello"); !strings.Contains(body, `<li class="same">`) || strings.Contains(body, `/use"`) || !strings.Contains(body, ">Delete</button>") {
+	e.store.Suggest(ctx, 1, "de", "hello", "Hallo {name}!", ai.ID)
+	if _, body := e.get(admin, "/t/de/intl/hello"); !strings.Contains(body, `<li class="same">`) || strings.Contains(body, `/use"`) || !strings.Contains(body, ">Delete</button>") {
 		t.Error("editor shows the same suggestion wrong")
 	}
 	// Suggestions with errors can't be used.
-	e.post(tr, fmt.Sprintf("/t/de/bye/suggestions/%d/use", entrySuggestion(t, e, "bye")), url.Values{"base": {"0"}})
-	if en, _ := e.store.Entry(ctx, "de", "bye"); en.Has {
+	e.post(tr, fmt.Sprintf("/t/de/intl/bye/suggestions/%d/use", entrySuggestion(t, e, "bye")), url.Values{"base": {"0"}})
+	if en, _ := e.store.Entry(ctx, 1, "de", "bye"); en.Has {
 		t.Errorf("broken suggestion used: %+v", en.Row)
 	}
-	if res := e.post(tr, fmt.Sprintf("/t/de/bye/suggestions/%d/dismiss", entrySuggestion(t, e, "bye")), nil); res.StatusCode != http.StatusForbidden {
+	if res := e.post(tr, fmt.Sprintf("/t/de/intl/bye/suggestions/%d/dismiss", entrySuggestion(t, e, "bye")), nil); res.StatusCode != http.StatusForbidden {
 		t.Errorf("translator dismiss: %d", res.StatusCode)
 	}
 }
 
 func entrySuggestion(t *testing.T, e *env, key string) int64 {
 	t.Helper()
-	en, err := e.store.Entry(context.Background(), "de", key)
+	en, err := e.store.Entry(context.Background(), 1, "de", key)
 	if err != nil || len(en.Suggestions) == 0 {
 		t.Fatalf("no suggestion for %s: %v", key, err)
 	}
@@ -926,7 +929,7 @@ func TestAIPage(t *testing.T) {
 	admin := e.user("admin@example.com", "admin")
 	ctx := context.Background()
 	opus, _ := e.store.CreateAIUser(ctx, "Claude Opus", "anthropic/claude-opus-5.5")
-	e.store.Save(ctx, "de", "bye", "Tschüss", 1, -1, store.KeepApproval) // by admin
+	e.store.Save(ctx, 1, "de", "bye", "Tschüss", 1, -1, store.KeepApproval) // by admin
 	_, body := e.get(admin, "/admin/ai")
 	for _, want := range []string{"German (de) · 2 missing", "Claude Opus · anthropic/claude-opus-5.5", `value="all" checked`, `name="suggest" value="1" checked`, `name="max_cost"`, `value="5"`} {
 		if !strings.Contains(body, want) {
@@ -1000,7 +1003,7 @@ func TestAIFillPage(t *testing.T) {
 	}
 	e.store.CreateAIUser(ctx, "Claude Opus", "anthropic/claude-opus-5.5")
 	gpt, _ := e.store.CreateAIUser(ctx, "GPT", "openai/gpt-6")
-	e.store.Suggest(ctx, "de", "bye", "Tschüss", gpt.ID)
+	e.store.Suggest(ctx, 1, "de", "bye", "Tschüss", gpt.ID)
 	e.store.AddLanguage(ctx, "fr")
 	deBox := `<input type="checkbox" name="lang" value="de" aria-label="German" data-fill="1" data-promote="0" >`
 	page := func(path string) string {
@@ -1053,7 +1056,7 @@ func TestAIFillPage(t *testing.T) {
 	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != gptFill {
 		t.Fatalf("promote: %d %s", res.StatusCode, res.Header.Get("Location"))
 	}
-	if en, _ := e.store.Entry(ctx, "de", "bye"); en.Text != "Tschüss" || en.UserID != gpt.ID || en.Approved {
+	if en, _ := e.store.Entry(ctx, 1, "de", "bye"); en.Text != "Tschüss" || en.UserID != gpt.ID || en.Approved {
 		t.Errorf("promoted: %+v", en.Row)
 	}
 }

@@ -20,6 +20,7 @@ const (
 // job is a run while it works: the run plus what this attempt has seen.
 type job struct {
 	run        *store.AIRun
+	file       store.File // the file the run translates
 	st         *store.Store
 	langName   string
 	sourceName string // the source language
@@ -35,7 +36,7 @@ type job struct {
 }
 
 func (j *job) saveJob() store.AISaveJob {
-	return store.AISaveJob{Lang: j.run.Lang, AIUserID: j.run.UserID, Input: j.run.Input, Suggest: j.run.Suggest}
+	return store.AISaveJob{File: j.run.FileID, Lang: j.run.Lang, AIUserID: j.run.UserID, Input: j.run.Input, Suggest: j.run.Suggest}
 }
 
 // reoffer lets next_strings hand out again what it handed out before,
@@ -50,7 +51,7 @@ func (j *job) reoffer() {
 
 // left returns the pending strings next_strings hasn't handed out yet.
 func (j *job) left(ctx context.Context) ([]store.AIString, error) {
-	all, err := j.st.AIPending(ctx, j.run.Lang, j.run.UserID, j.run.Input)
+	all, err := j.st.AIPending(ctx, j.run.FileID, j.run.Lang, j.run.UserID, j.run.Input)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +80,7 @@ func (j *job) tools() []Tool {
 	return []Tool{
 		{
 			Name:        "get_job",
-			Description: "Returns the job: target language, mode and how many strings are left.",
+			Description: "Returns the job: the file, target language, mode and how many strings are left.",
 			Schema:      object(map[string]any{}),
 			Call: func(ctx context.Context, _ json.RawMessage) (any, error) {
 				left, err := j.left(ctx)
@@ -87,6 +88,7 @@ func (j *job) tools() []Tool {
 					return nil, err
 				}
 				return map[string]any{
+					"file":         j.fileLabel(),
 					"language":     fmt.Sprintf("%s (%s)", j.langName, j.run.Lang),
 					"mode":         j.mode(),
 					"strings_left": len(left),
@@ -133,8 +135,9 @@ func (j *job) tools() []Tool {
 		},
 		{
 			Name: "lookup",
-			Description: "Searches the existing translations of this language by key, source text or translated text, " +
-				"to keep terms consistent. Approved translations come first; prefer their wording.",
+			Description: "Searches the existing translations of this language in all files of the project by key, source text " +
+				"or translated text, to keep terms consistent. Approved translations come first; prefer their wording. " +
+				"Each match names its file; keys are unique only within a file.",
 			Schema: object(map[string]any{
 				"query": map[string]any{"type": "string", "description": "A word or phrase, in the source language or the target language."},
 			}),
@@ -151,6 +154,7 @@ func (j *job) tools() []Tool {
 					return nil, err
 				}
 				type match struct {
+					File        string `json:"file"`
 					Key         string `json:"key"`
 					Source      string `json:"source"`
 					Translation string `json:"translation"`
@@ -159,7 +163,7 @@ func (j *job) tools() []Tool {
 				}
 				out := []match{}
 				for _, m := range ms {
-					out = append(out, match{m.Key, m.Source, m.Text, m.Approved, m.Outdated})
+					out = append(out, match{m.File, m.Key, m.Source, m.Text, m.Approved, m.Outdated})
 				}
 				j.log(ctx, "lookup %q: %d %s", in.Query, len(out), plural(len(out), "match", "matches"))
 				return map[string]any{"matches": out}, nil
@@ -245,6 +249,11 @@ func (j *job) record(ctx context.Context, res []store.AISaved) (any, error) {
 	}
 	j.log(ctx, "%s", msg)
 	return map[string]any{"results": out}, nil
+}
+
+// fileLabel names the file for the model: its name and path.
+func (j *job) fileLabel() string {
+	return fmt.Sprintf("%s (%s)", j.file.Name, j.file.Template)
 }
 
 func plural(n int, one, many string) string {

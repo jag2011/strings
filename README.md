@@ -15,6 +15,9 @@ translated ARBs. One binary, one SQLite file, no JavaScript framework.
 - **Drafts stay hidden.** Mark unfinished source strings with
   `"@key": {"x-draft": true}` and translators won't see them until you drop
   the tag.
+- **Several files per project.** The app strings and the store listing,
+  say, each with their own keys, sharing languages, translators and AI
+  users. Files keep their paths in your repository.
 - **Outdated detection.** When the source text changes, its translations are
   flagged until someone checks them. Uploading a new source in the web UI
   shows a review first, where typo fixes can keep their translations.
@@ -49,18 +52,39 @@ or from a checkout: `go build -o bin/stringsd ./cmd/stringsd`.
 # Create the first admin. This prints a link to set the password.
 stringsd user -admin -url http://localhost:8080 you@example.com "Your Name"
 
-# Import existing files. The file in the source language (default: en)
-# becomes the source; the others seed translations.
-stringsd import path/to/lib/l10n/*.arb
+# Import existing files from your app's repository. A file in the source
+# language (default: en) becomes the source of a file; the others seed
+# translations.
+cd path/to/app
+stringsd import -db ~/strings.db lib/l10n/*.arb fastlane/listing/*.arb
 
-stringsd serve
+stringsd serve -db ~/strings.db
 ```
 
 Open the printed link, set a password, and you're in.
 
-Files are matched by name: `intl_en.arb`, `app_pt_BR.arb`, `zh_Hant.arb`. The
-prefix is taken from the source file, the language codes are the Flutter
-locale codes from the file names.
+## Files
+
+A project can have several source files, like the app strings and the store
+listing. Each file has its own keys: the same key in two files is two
+different strings. Languages, users, AI users and settings are shared.
+
+A file is identified by a path template relative to the repository root,
+with `{locale}` for the language: `lib/l10n/intl_{locale}.arb`. The language
+codes are the Flutter locale codes from the file names (`de`, `pt_BR`,
+`zh_Hant`).
+
+- Importing a source file that fits no template creates a file: the path with
+  the language replaced, named after the file name prefix (`store_en.arb` →
+  `store`, `en.arb` → `app`). Translations need their source file first.
+- Files uploaded one by one in the browser carry no folders, so they are
+  matched by their file name alone, which works as long as no two files have
+  the same name. A zip keeps its folders; its paths are relative to the
+  repository root, like the exports.
+- *Settings → Files* changes a file's path, name and order. A file nobody
+  has worked on yet, like a mistaken upload, can be deleted.
+- Exports write each file's translations at their paths: the zip unpacks at
+  the repository root.
 
 ## Commands
 
@@ -72,37 +96,46 @@ environment variable).
 |---|---|
 | `serve [-addr :8080]` | Runs the web app and API (`STRINGS_ADDR`) |
 | `user [-admin \| -proofreader] [-url …] <email> <name>` | Creates a user and prints an invite link |
-| `import <files…>` | Imports ARB files |
-| `export [-out dir]` | Writes one ARB per target language |
+| `import [-root dir] <files…>` | Imports ARB files; paths are taken relative to `-root` (default: the working directory). Files outside it are matched by their file name |
+| `export [-out dir] [-file name]` | Writes the translations of every file, or of one, at their paths under `-out` |
 | `token <name>` | Creates an API token |
 
 ## Syncing from your app's repository
 
-Create a token under *Settings → API tokens* or with `stringsd token ci`, then:
+Create a token under *Settings → API tokens* or with `stringsd token ci`, then,
+at the root of your app's repository:
 
 ```sh
 H="Authorization: Bearer $STRINGS_TOKEN"
 
-# Push the source strings
-curl -fsS -X PUT -H "$H" --data-binary @lib/l10n/intl_en.arb "$STRINGS_URL/api/v1/source"
-
-# Pull the translations
-for lang in de fr pt_BR; do
-  curl -fsS -H "$H" -o "lib/l10n/intl_$lang.arb" "$STRINGS_URL/api/v1/arb/intl_$lang.arb"
+# Push the source strings of each file
+for f in lib/l10n/intl_en.arb fastlane/listing/store_en.arb; do
+  curl -fsS -X PUT -H "$H" --data-binary @"$f" "$STRINGS_URL/api/v1/files/$f"
 done
+
+# Pull the translations of all files
+curl -fsS -H "$H" -o strings.zip "$STRINGS_URL/api/v1/files.zip" && unzip -o strings.zip && rm strings.zip
 ```
+
+Paths in the API are relative to the repository root, as in the file
+templates. A path without a folder also matches a template by its file name.
 
 | Endpoint | |
 |---|---|
-| `POST /api/v1/source/preview` | Body: source ARB. Shows what `PUT /api/v1/source` would change, like the review in the web UI: the revision, added and removed keys, and the changed strings with their old and new text, number of translations and whether they were drafts. Changes nothing |
-| `PUT /api/v1/source` | Body: source ARB. Returns the new revision and added, changed, removed and unchanged counts. Translations of changed strings become outdated, except for keys listed in `keep` or `remove` parameters (`?keep=a&keep=b&remove=c`). With `revision` from a preview, it fails with 409 if the source changed since |
-| `PUT /api/v1/translations/{lang}` | Body: ARB. Seeds a language; never overwrites edits or approvals made in strings, nor brings back texts changed or removed there (`stale`) |
-| `GET /api/v1/arb/{prefix}{lang}.arb` | One language |
-| `GET /api/v1/arb.zip` | All target languages |
-| `GET /api/v1/stats` | Done, outdated, missing and approved per language |
+| `PUT /api/v1/files/{path}` | Body: ARB. A source path, like `lib/l10n/intl_en.arb`, imports the source of its file, or creates the file; it returns the file, `new_file`, the new revision and added, changed, removed and unchanged counts. Translations of changed strings become outdated, except for keys listed in `keep` or `remove` parameters (`?keep=a&keep=b&remove=c`). With `revision` from a preview, it fails with 409 if the file's source changed since. A translation path, like `lib/l10n/intl_de.arb`, seeds that language; it never overwrites edits or approvals made in strings, nor brings back texts changed or removed there (`stale`) |
+| `POST /api/v1/preview/{path}` | Body: source ARB. Shows what the `PUT` would change, like the review in the web UI: `new_file`, the revision, added and removed keys, and the changed strings with their old and new text, number of translations and whether they were drafts. Changes nothing |
+| `GET /api/v1/files/{path}` | One translated file |
+| `GET /api/v1/files.zip` | All translated files at their paths; `?file=store` for those of one file |
+| `GET /api/v1/files` | The files: name, path template, revision and number of strings |
+| `GET /api/v1/stats` | Done, outdated, missing and approved per language, in total and per file (`files`) |
 | `GET /api/v1/contributors` | Per language: contributor names and number of strings, for credits |
 
-The source file is never exported. It belongs to your repository.
+Deprecated, from before there were several files: `PUT /api/v1/source`,
+`POST /api/v1/source/preview` and `PUT /api/v1/translations/{lang}` work on
+the first file. `GET /api/v1/arb/{name}.arb` and `GET /api/v1/arb.zip` find
+files by their file name and leave out the folders.
+
+The source files are never exported. They belong to your repository.
 
 ## How translations are handled
 
@@ -176,14 +209,18 @@ OPENROUTER_API_KEY=sk-or-…
    `anthropic/claude-opus-5.5` or `openai/gpt-5.5`. The model field offers
    OpenRouter's current models that can call tools, with their prices
    (loaded from its public model list, refreshed every 6 hours).
-2. Under *AI → Jobs*, pick a language, the AI user, *Missing* or *All*
-   strings and a cost limit, and press *Translate*. The run starts in the
-   background; its page shows progress, cost and a log.
+2. Under *AI → Jobs*, pick a file (if there are several), a language, the
+   AI user, *Missing* or *All* strings and a cost limit, and press
+   *Translate*. The run starts in the background; its page shows progress,
+   cost and a log.
 
 The instructions for the model are under *AI → Prompt*: a built-in prompt
 with the ARB/ICU rules and how to work, which you can edit, e.g. to describe
-your app or its tone. `{{language}}`, `{{source}}`, `{{code}}` and `{{job}}`
-are filled in per run, and each run keeps the prompt it ran with.
+your app or its tone. `{{file}}`, `{{language}}`, `{{source}}`, `{{code}}` and
+`{{job}}` are filled in per run, so a prompt can treat the store listing
+differently, and each run keeps the prompt it ran with. A run translates one
+file; when it looks up existing translations to keep terms consistent, it
+searches all files.
 
 What a run may do is enforced when it saves, whatever the model asks:
 missing strings get the AI user's translation (or a suggestion, with *Save as
@@ -197,7 +234,7 @@ Runs that a server restart interrupted can be started again and continue
 where they stopped. Several AI users can translate the same language; their
 suggestions appear side by side in the editor.
 
-*AI → Fill* shows per language what an AI user has left to suggest. Tick
+*AI → Fill* shows per language what an AI user has left to suggest in a file. Tick
 languages to create fill jobs for its missing strings, or to promote its
 suggestions: they become the translations of missing and outdated strings,
 unapproved, and wait for a proofreader like any other machine translation.

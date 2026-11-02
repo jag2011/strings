@@ -2,8 +2,10 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,9 +18,10 @@ import (
 const DefaultAICostLimit = "5"
 
 type aiData struct {
-	Enabled bool // an OpenRouter key is set
-	Stats   []store.LangStats
-	Users   []*store.User // AI users only
+	Enabled bool              // an OpenRouter key is set
+	File    store.File        // the file to translate
+	Stats   []store.LangStats // of File
+	Users   []*store.User     // AI users only
 	Runs    []*store.AIRun
 	Lang    string
 	UserID  int64
@@ -31,7 +34,7 @@ type aiData struct {
 func (srv *Server) renderAI(w http.ResponseWriter, r *http.Request, u *store.User, status int, d aiData) error {
 	var err error
 	d.Enabled = srv.AI != nil
-	if d.Stats, err = srv.store.Stats(r.Context()); err != nil {
+	if d.Stats, err = srv.store.Stats(r.Context(), d.File.ID); err != nil {
 		return err
 	}
 	users, err := srv.store.Users(r.Context())
@@ -55,13 +58,34 @@ func (srv *Server) renderAI(w http.ResponseWriter, r *http.Request, u *store.Use
 	return srv.render(w, r, status, "ai", u, "AI translation", d)
 }
 
+// aiFile returns the file an AI page works on: the one named by the file
+// parameter, or the first. No file (ID 0) if there are none yet.
+func (srv *Server) aiFile(r *http.Request) (store.File, error) {
+	f, err := srv.store.FileByName(r.Context(), r.FormValue("file"))
+	if errors.Is(err, store.ErrNotFound) {
+		f, err = srv.store.FirstFile(r.Context())
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		return store.File{}, nil
+	}
+	return f, err
+}
+
 func (srv *Server) aiPage(w http.ResponseWriter, r *http.Request, u *store.User) error {
-	return srv.renderAI(w, r, u, http.StatusOK, aiData{Suggest: true})
+	file, err := srv.aiFile(r)
+	if err != nil {
+		return err
+	}
+	return srv.renderAI(w, r, u, http.StatusOK, aiData{File: file, Suggest: true})
 }
 
 // aiTranslate queues a run.
 func (srv *Server) aiTranslate(w http.ResponseWriter, r *http.Request, u *store.User) error {
-	d := aiData{Lang: r.PostFormValue("lang"), Input: r.PostFormValue("input"), Suggest: r.PostFormValue("suggest") == "1",
+	file, err := srv.aiFile(r)
+	if err != nil {
+		return err
+	}
+	d := aiData{File: file, Lang: r.PostFormValue("lang"), Input: r.PostFormValue("input"), Suggest: r.PostFormValue("suggest") == "1",
 		MaxCost: strings.TrimSpace(r.PostFormValue("max_cost"))}
 	d.UserID, _ = strconv.ParseInt(r.PostFormValue("user"), 10, 64)
 	fail := func(msg string) error {
@@ -71,6 +95,9 @@ func (srv *Server) aiTranslate(w http.ResponseWriter, r *http.Request, u *store.
 	if srv.AI == nil {
 		return fail("AI translation needs OPENROUTER_API_KEY; see the README.")
 	}
+	if file.ID == 0 {
+		return fail("There are no strings yet. Import a source file first.")
+	}
 	if !slices.Contains([]string{store.AIInputMissing, store.AIInputAll}, d.Input) {
 		return fail("Choose which strings to translate.")
 	}
@@ -78,7 +105,7 @@ func (srv *Server) aiTranslate(w http.ResponseWriter, r *http.Request, u *store.
 	if err != nil || maxCost <= 0 || maxCost > 1000 {
 		return fail("The cost limit must be an amount in dollars, more than 0 and at most 1000.")
 	}
-	stats, err := srv.store.Stats(r.Context())
+	stats, err := srv.store.Stats(r.Context(), file.ID)
 	if err != nil {
 		return err
 	}
@@ -90,7 +117,7 @@ func (srv *Server) aiTranslate(w http.ResponseWriter, r *http.Request, u *store.
 	if err != nil || !ai.IsAI() || ai.Disabled {
 		return fail("Choose an AI user.")
 	}
-	pending, err := srv.store.AIPending(r.Context(), d.Lang, ai.ID, d.Input)
+	pending, err := srv.store.AIPending(r.Context(), file.ID, d.Lang, ai.ID, d.Input)
 	if err != nil {
 		return err
 	}
@@ -101,7 +128,7 @@ func (srv *Server) aiTranslate(w http.ResponseWriter, r *http.Request, u *store.
 		return fail(fmt.Sprintf("%s has no missing strings left for %s.", langName(d.Lang), ai.Name))
 	}
 
-	run, err := srv.queueAIRun(r.Context(), u, store.AIRun{Lang: d.Lang, UserID: ai.ID, Input: d.Input, Suggest: d.Suggest, MaxCost: maxCost}, pending)
+	run, err := srv.queueAIRun(r.Context(), u, store.AIRun{FileID: file.ID, Lang: d.Lang, UserID: ai.ID, Input: d.Input, Suggest: d.Suggest, MaxCost: maxCost}, pending)
 	if err != nil {
 		return err
 	}
@@ -116,15 +143,20 @@ func (srv *Server) queueAIRun(ctx context.Context, u *store.User, run store.AIRu
 	if err != nil {
 		return nil, err
 	}
-	if err := srv.store.AddAIRunEvent(ctx, created.ID, fmt.Sprintf("queued by %s: %s", u.Name, aiPlan(created, pending))); err != nil {
+	files, err := srv.store.Files(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := srv.store.AddAIRunEvent(ctx, created.ID, fmt.Sprintf("queued by %s: %s", u.Name, aiPlan(created, pending, len(files) > 1))); err != nil {
 		return nil, err
 	}
 	srv.AI.Wake()
 	return created, nil
 }
 
-// aiPlan says what a run will do with the pending strings.
-func aiPlan(run *store.AIRun, pending []store.AIString) string {
+// aiPlan says what a run will do with the pending strings, naming the file
+// if there are several.
+func aiPlan(run *store.AIRun, pending []store.AIString, multi bool) string {
 	var missing, existing int
 	for _, p := range pending {
 		if p.HasCurrent {
@@ -135,6 +167,9 @@ func aiPlan(run *store.AIRun, pending []store.AIString) string {
 	}
 	n := missing + existing
 	plan := fmt.Sprintf("%d %s into %s", n, plural(n, "string", "strings"), langName(run.Lang))
+	if multi {
+		plan = fmt.Sprintf("%d %s of %s into %s", n, plural(n, "string", "strings"), run.FileName, langName(run.Lang))
+	}
 	switch {
 	case run.Suggest:
 		return plan + ", all as suggestions"
@@ -148,6 +183,7 @@ func aiPlan(run *store.AIRun, pending []store.AIString) string {
 
 type aiFillData struct {
 	Enabled bool          // an OpenRouter key is set
+	File    store.File    // the file to fill
 	Users   []*store.User // AI users only
 	User    *store.User   // the chosen one
 	Fill    []store.AIFill
@@ -162,7 +198,11 @@ func (srv *Server) aiFillPage(w http.ResponseWriter, r *http.Request, u *store.U
 	if err != nil {
 		return err
 	}
-	d := aiFillData{Enabled: srv.AI != nil, Active: map[string]*store.AIRun{}, MaxCost: DefaultAICostLimit}
+	file, err := srv.aiFile(r)
+	if err != nil {
+		return err
+	}
+	d := aiFillData{Enabled: srv.AI != nil, File: file, Active: map[string]*store.AIRun{}, MaxCost: DefaultAICostLimit}
 	id, _ := strconv.ParseInt(r.URL.Query().Get("user"), 10, 64)
 	for _, au := range users {
 		if au.IsAI() && !au.Disabled {
@@ -172,37 +212,51 @@ func (srv *Server) aiFillPage(w http.ResponseWriter, r *http.Request, u *store.U
 			}
 		}
 	}
-	if d.User != nil {
-		if d.Fill, err = srv.store.AIFillStats(r.Context(), d.User.ID); err != nil {
+	if d.User != nil && file.ID != 0 {
+		if d.Fill, err = srv.store.AIFillStats(r.Context(), file.ID, d.User.ID); err != nil {
 			return err
 		}
-		if d.Active, err = srv.activeAIRuns(r.Context(), d.User.ID); err != nil {
+		if d.Active, err = srv.activeAIRuns(r.Context(), file.ID, d.User.ID); err != nil {
 			return err
 		}
 	}
 	return srv.render(w, r, http.StatusOK, "aifill", u, "AI fill", d)
 }
 
-// activeAIRuns returns an AI user's queued or running run per language.
-func (srv *Server) activeAIRuns(ctx context.Context, userID int64) (map[string]*store.AIRun, error) {
+// activeAIRuns returns an AI user's queued or running run per language of
+// a file.
+func (srv *Server) activeAIRuns(ctx context.Context, file, userID int64) (map[string]*store.AIRun, error) {
 	runs, err := srv.store.AIRuns(ctx, 50)
 	if err != nil {
 		return nil, err
 	}
 	active := map[string]*store.AIRun{}
 	for _, run := range runs {
-		if run.UserID == userID && run.Active() && active[run.Lang] == nil {
+		if run.FileID == file && run.UserID == userID && run.Active() && active[run.Lang] == nil {
 			active[run.Lang] = run
 		}
 	}
 	return active, nil
 }
 
-// aiFill queues a run per chosen language for the AI user's missing strings,
-// saved as suggestions. Languages it's already working on are left out.
+// fillURL is the fill page of an AI user, and of a file if one was chosen.
+func fillURL(user int64, file string) string {
+	if file == "" {
+		return fmt.Sprintf("/admin/ai/fill?user=%d", user)
+	}
+	return fmt.Sprintf("/admin/ai/fill?user=%d&file=%s", user, url.QueryEscape(file))
+}
+
+// aiFill queues a run per chosen language for the AI user's missing strings
+// of a file, saved as suggestions. Languages it's already working on are
+// left out.
 func (srv *Server) aiFill(w http.ResponseWriter, r *http.Request, u *store.User) error {
 	id, _ := strconv.ParseInt(r.PostFormValue("user"), 10, 64)
-	back := fmt.Sprintf("/admin/ai/fill?user=%d", id)
+	file, err := srv.aiFile(r)
+	if err != nil {
+		return err
+	}
+	back := fillURL(id, r.PostFormValue("file"))
 	if srv.AI == nil {
 		return redirect(w, r, back, "AI translation needs OPENROUTER_API_KEY; see the README.")
 	}
@@ -210,11 +264,14 @@ func (srv *Server) aiFill(w http.ResponseWriter, r *http.Request, u *store.User)
 	if err != nil || !ai.IsAI() || ai.Disabled {
 		return badRequest("Choose an AI user.")
 	}
-	stats, err := srv.store.Stats(r.Context())
+	if file.ID == 0 {
+		return badRequest("Import a source file first.")
+	}
+	stats, err := srv.store.Stats(r.Context(), file.ID)
 	if err != nil {
 		return err
 	}
-	active, err := srv.activeAIRuns(r.Context(), ai.ID)
+	active, err := srv.activeAIRuns(r.Context(), file.ID, ai.ID)
 	if err != nil {
 		return err
 	}
@@ -224,14 +281,14 @@ func (srv *Server) aiFill(w http.ResponseWriter, r *http.Request, u *store.User)
 		if active[lang] != nil || !slices.ContainsFunc(stats, func(s store.LangStats) bool { return s.Lang == lang }) {
 			continue
 		}
-		pending, err := srv.store.AIPending(r.Context(), lang, ai.ID, store.AIInputMissing)
+		pending, err := srv.store.AIPending(r.Context(), file.ID, lang, ai.ID, store.AIInputMissing)
 		if err != nil {
 			return err
 		}
 		if len(pending) == 0 {
 			continue
 		}
-		run, err := srv.queueAIRun(r.Context(), u, store.AIRun{Lang: lang, UserID: ai.ID, Input: store.AIInputMissing, Suggest: true, MaxCost: maxCost}, pending)
+		run, err := srv.queueAIRun(r.Context(), u, store.AIRun{FileID: file.ID, Lang: lang, UserID: ai.ID, Input: store.AIInputMissing, Suggest: true, MaxCost: maxCost}, pending)
 		if err != nil {
 			return err
 		}
@@ -244,16 +301,23 @@ func (srv *Server) aiFill(w http.ResponseWriter, r *http.Request, u *store.User)
 }
 
 // aiPromote makes the AI user's suggestions the translations of the strings
-// missing or outdated in the chosen languages, unapproved, as if each was used
-// in the editor.
+// of a file missing or outdated in the chosen languages, unapproved, as if
+// each was used in the editor.
 func (srv *Server) aiPromote(w http.ResponseWriter, r *http.Request, u *store.User) error {
 	id, _ := strconv.ParseInt(r.PostFormValue("user"), 10, 64)
-	back := fmt.Sprintf("/admin/ai/fill?user=%d", id)
+	file, err := srv.aiFile(r)
+	if err != nil {
+		return err
+	}
+	back := fillURL(id, r.PostFormValue("file"))
 	ai, err := srv.store.User(r.Context(), id)
 	if err != nil || !ai.IsAI() {
 		return badRequest("Choose an AI user.")
 	}
-	stats, err := srv.store.Stats(r.Context())
+	if file.ID == 0 {
+		return badRequest("Import a source file first.")
+	}
+	stats, err := srv.store.Stats(r.Context(), file.ID)
 	if err != nil {
 		return err
 	}
@@ -263,7 +327,7 @@ func (srv *Server) aiPromote(w http.ResponseWriter, r *http.Request, u *store.Us
 		if !slices.ContainsFunc(stats, func(s store.LangStats) bool { return s.Lang == lang }) {
 			continue
 		}
-		n, err := srv.store.PromoteSuggestions(r.Context(), lang, ai.ID)
+		n, err := srv.store.PromoteSuggestions(r.Context(), file.ID, lang, ai.ID)
 		if err != nil {
 			return err
 		}

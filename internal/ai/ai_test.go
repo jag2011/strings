@@ -108,13 +108,14 @@ func translateAll(size int, tr func(key, src string) string) func(c *caller) (st
 func german(_, src string) string { return "DE " + src }
 
 type env struct {
-	t   *testing.T
-	st  *store.Store
-	ai  *store.User
-	p   int64 // a proofreader
-	fa  *fakeAgent
-	r   *Runner
-	ctx context.Context
+	t    *testing.T
+	st   *store.Store
+	file int64 // the file the runs translate
+	ai   *store.User
+	p    int64 // a proofreader
+	fa   *fakeAgent
+	r    *Runner
+	ctx  context.Context
 }
 
 func setup(t *testing.T, script func(c *caller) (string, error)) *env {
@@ -126,14 +127,15 @@ func setup(t *testing.T, script func(c *caller) (string, error)) *env {
 	t.Cleanup(func() { st.Close() })
 	ctx := context.Background()
 	f, _ := arb.Parse([]byte(`{"a": "Apple", "@a": {"description": "The fruit"}, "b": "Banana {n}", "c": "Cherry", "d": "Date", "e": "Elder"}`))
-	if _, err := st.ImportSource(ctx, f, nil); err != nil {
+	file, _, err := st.ImportNewSource(ctx, store.File{Template: "lib/l10n/intl_{locale}.arb", Name: "intl"}, f)
+	if err != nil {
 		t.Fatal(err)
 	}
 	st.AddLanguage(ctx, "de")
 	ai, _ := st.CreateAIUser(ctx, "Robo", "anthropic/claude-opus-5.5")
 	p, _ := st.CreateUser(ctx, "p@example.com", "P", "proofreader")
 	fa := &fakeAgent{script: script}
-	return &env{t: t, st: st, ai: ai, p: p.ID, fa: fa, r: NewRunner(st, fa), ctx: ctx}
+	return &env{t: t, st: st, file: file.ID, ai: ai, p: p.ID, fa: fa, r: NewRunner(st, fa), ctx: ctx}
 }
 
 // start runs the worker until the test ends.
@@ -147,7 +149,7 @@ func (e *env) start() {
 
 func (e *env) queue(run store.AIRun) *store.AIRun {
 	e.t.Helper()
-	run.Lang, run.UserID = "de", e.ai.ID
+	run.FileID, run.Lang, run.UserID = e.file, "de", e.ai.ID
 	if run.Input == "" {
 		run.Input = store.AIInputMissing
 	}
@@ -201,7 +203,7 @@ func (e *env) events(id int64) string {
 
 func TestRunTranslatesMissing(t *testing.T) {
 	e := setup(t, translateAll(2, german))
-	e.st.Save(e.ctx, "de", "c", "Kirsche", e.p, -1, store.KeepApproval)
+	e.st.Save(e.ctx, e.file, "de", "c", "Kirsche", e.p, -1, store.KeepApproval)
 	e.start()
 	r := e.wait(e.queue(store.AIRun{}).ID)
 	if r.Status != store.AIDone || r.Translated != 4 || r.Suggested != 0 || r.Failed != 0 || r.Summary != "Translated everything." || r.Error != "" {
@@ -210,11 +212,11 @@ func TestRunTranslatesMissing(t *testing.T) {
 	if r.Steps == 0 || r.InputTokens != int64(r.Steps)*1000 || r.CachedTokens != int64(r.Steps)*800 {
 		t.Errorf("usage: %+v", r)
 	}
-	a, _ := e.st.Entry(e.ctx, "de", "a")
+	a, _ := e.st.Entry(e.ctx, e.file, "de", "a")
 	if a.Text != "DE Apple" || a.UserID != e.ai.ID || a.Origin != "machine" {
 		t.Errorf("a: %+v", a.Row)
 	}
-	if c, _ := e.st.Entry(e.ctx, "de", "c"); c.Text != "Kirsche" || len(c.Suggestions) != 0 {
+	if c, _ := e.st.Entry(e.ctx, e.file, "de", "c"); c.Text != "Kirsche" || len(c.Suggestions) != 0 {
 		t.Errorf("c touched: %+v", c.Row)
 	}
 	log := e.events(r.ID)
@@ -234,10 +236,10 @@ func TestRunTranslatesMissing(t *testing.T) {
 
 func TestCustomPrompt(t *testing.T) {
 	e := setup(t, translateAll(10, german))
-	e.st.SetSettings(e.ctx, map[string]string{"ai_prompt": "Translate into {{language}} ({{ code }}), a game. {{job}} {{unknown}}"})
+	e.st.SetSettings(e.ctx, map[string]string{"ai_prompt": "Translate {{file}} into {{language}} ({{ code }}), a game. {{job}} {{unknown}}"})
 	e.start()
 	r := e.wait(e.queue(store.AIRun{Suggest: true}).ID)
-	want := "Translate into de (de), a game. Translate the strings that have no translation yet. Everything you save becomes a suggestion for a person to review. {{unknown}}"
+	want := "Translate intl (lib/l10n/intl_{locale}.arb) into de (de), a game. Translate the strings that have no translation yet. Everything you save becomes a suggestion for a person to review. {{unknown}}"
 	if s := e.fa.sessions[0].System; s != want || r.Prompt != want {
 		t.Errorf("system prompt: %q", s)
 	}
@@ -257,31 +259,39 @@ func TestCheckPrompt(t *testing.T) {
 
 func TestRunSuggestsForAll(t *testing.T) {
 	e := setup(t, translateAll(10, german))
-	e.st.Save(e.ctx, "de", "c", "Kirsche", e.p, -1, store.KeepApproval)
-	e.st.Save(e.ctx, "de", "d", "Dattel", e.p, -1, store.Approve)
+	e.st.Save(e.ctx, e.file, "de", "c", "Kirsche", e.p, -1, store.KeepApproval)
+	e.st.Save(e.ctx, e.file, "de", "d", "Dattel", e.p, -1, store.Approve)
 	e.start()
 	r := e.wait(e.queue(store.AIRun{Input: store.AIInputAll}).ID)
 	if r.Status != store.AIDone || r.Translated != 3 || r.Suggested != 1 {
 		t.Fatalf("run: %+v", r)
 	}
-	c, _ := e.st.Entry(e.ctx, "de", "c")
+	c, _ := e.st.Entry(e.ctx, e.file, "de", "c")
 	if c.Text != "Kirsche" || len(c.Suggestions) != 1 || c.Suggestions[0].Text != "DE Cherry" {
 		t.Errorf("c: %+v %+v", c.Row, c.Suggestions)
 	}
-	if d, _ := e.st.Entry(e.ctx, "de", "d"); d.Text != "Dattel" || len(d.Suggestions) != 0 {
+	if d, _ := e.st.Entry(e.ctx, e.file, "de", "d"); d.Text != "Dattel" || len(d.Suggestions) != 0 {
 		t.Errorf("approved d touched: %+v", d)
 	}
 }
 
 func TestNextStringsAndLookup(t *testing.T) {
 	e := setup(t, nil)
-	e.st.Save(e.ctx, "de", "c", "Kirsche", e.p, -1, store.Approve)
-	e.st.Save(e.ctx, "de", "d", "Dattelkirsche", e.p, -1, store.KeepApproval)
-	run, _ := e.st.CreateAIRun(e.ctx, store.AIRun{Lang: "de", UserID: e.ai.ID, Input: store.AIInputAll, MaxCost: 1})
-	j := &job{run: run, st: e.st, langName: "German", offered: map[string]bool{}, failed: map[string]bool{}, log: func(context.Context, string, ...any) {}}
+	e.st.Save(e.ctx, e.file, "de", "c", "Kirsche", e.p, -1, store.Approve)
+	e.st.Save(e.ctx, e.file, "de", "d", "Dattelkirsche", e.p, -1, store.KeepApproval)
+	// A second file with a matching translation, which lookup finds too.
+	store2, _, err := e.st.ImportNewSource(e.ctx, store.File{Template: "fastlane/store_{locale}.arb", Name: "store"},
+		mustParse(t, `{"c": "Cherry pie", "x": "X"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.st.Save(e.ctx, store2.ID, "de", "c", "Kirschkuchen", e.p, -1, store.KeepApproval)
+	run, _ := e.st.CreateAIRun(e.ctx, store.AIRun{FileID: e.file, Lang: "de", UserID: e.ai.ID, Input: store.AIInputAll, MaxCost: 1})
+	file, _ := e.st.File(e.ctx, e.file)
+	j := &job{run: run, file: file, st: e.st, langName: "German", offered: map[string]bool{}, failed: map[string]bool{}, log: func(context.Context, string, ...any) {}}
 	c := &caller{ctx: e.ctx, s: Session{Tools: j.tools()}}
 
-	if got := c.call("get_job", struct{}{}); got["strings_left"] != 4.0 || got["language"] != "German (de)" {
+	if got := c.call("get_job", struct{}{}); got["strings_left"] != 4.0 || got["language"] != "German (de)" || got["file"] != "intl (lib/l10n/intl_{locale}.arb)" {
 		t.Errorf("get_job: %v", got)
 	}
 	res := c.call("next_strings", map[string]int{"limit": 2})
@@ -304,9 +314,10 @@ func TestNextStringsAndLookup(t *testing.T) {
 		t.Errorf("second batch, approved c left out: %v %v", keys, res)
 	}
 
-	got := c.call("lookup", map[string]string{"query": "kirsche"})
+	got := c.call("lookup", map[string]string{"query": "kirsch"})
 	ms := got["matches"].([]any)
-	if len(ms) != 2 || ms[0].(map[string]any)["key"] != "c" || ms[0].(map[string]any)["approved"] != true {
+	if len(ms) != 3 || ms[0].(map[string]any)["key"] != "c" || ms[0].(map[string]any)["approved"] != true ||
+		ms[2].(map[string]any)["file"] != "store" || ms[2].(map[string]any)["translation"] != "Kirschkuchen" {
 		t.Errorf("lookup: %v", got)
 	}
 	if got := c.call("lookup", map[string]string{"query": " "}); got["error"] == nil {
@@ -501,10 +512,19 @@ func TestInterruptedAndRestarted(t *testing.T) {
 	if got.Status != store.AIDone || got.Translated != 5 {
 		t.Fatalf("restarted: %+v", got)
 	}
-	if a, _ := e.st.Entry(e.ctx, "de", "a"); a.Text != "Apfel" {
+	if a, _ := e.st.Entry(e.ctx, e.file, "de", "a"); a.Text != "Apfel" {
 		t.Errorf("a translated again: %q", a.Text)
 	}
 	if log := e.events(r.ID); !strings.Contains(log, "started again") || !strings.Contains(log, "next_strings: 4 strings, 0 left") {
 		t.Errorf("log:\n%s", log)
 	}
+}
+
+func mustParse(t *testing.T, src string) *arb.File {
+	t.Helper()
+	f, err := arb.Parse([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
 }

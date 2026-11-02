@@ -1,0 +1,6 @@
+{{/* Links that limit a page to one file, or show all. Empty with one file. */}}
+{{define "file-chips"}}{{with .}}
+<nav class="tabs files" aria-label="Files" data-tabs="files">
+  {{range .}}<a href="{{base}}{{.URL}}" {{if .Current}}aria-current="page"{{end}}>{{.Label}}</a>{{end}}
+</nav>
+{{end}}{{end}}

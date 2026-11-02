@@ -12,7 +12,8 @@
     {{if not $d.Mine}}<td>{{if .UserID}}<a href="{{base}}/u/{{.UserID}}">{{.UserName}}</a>{{else}}<span class="muted">—</span>{{end}}</td>{{end}}
     <td class="key">
       {{if not $d.Lang}}<span class="muted">{{.Lang}}</span> {{end}}
-      {{- if .Open}}<a href="{{base}}/t/{{.Lang}}/{{esc .Key}}">{{.Key}}</a>{{else}}{{.Key}}{{end}}
+      {{- if $d.Multi}}<span class="file-label">{{.File}}</span>{{end}}
+      {{- if .Open}}<a href="{{strURL .Lang .File .Key}}">{{.Key}}</a>{{else}}{{.Key}}{{end}}
     </td>
     <td class="change" lang="{{bcp47 .Lang}}" dir="{{dir .Lang}}">
       {{- if eq .Kind "approved"}}

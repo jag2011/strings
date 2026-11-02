@@ -17,13 +17,21 @@
       {{range $d.Users}}<option value="{{.ID}}" {{if eq .ID $d.User.ID}}selected{{end}}>{{.Name}} · {{.AIModel}}</option>{{end}}
     </select>
   </label>
+  {{if .Multi}}
+  <label>File
+    <select name="file" data-autosubmit>
+      {{range .Files}}<option value="{{.Name}}" {{if eq .ID $d.File.ID}}selected{{end}}>{{.Name}} · {{.Template}}</option>{{end}}
+    </select>
+  </label>
+  {{end}}
   <noscript><button>Show</button></noscript>
 </form>
 
-<p class="muted small">Missing strings have no translation. Only suggestions for the current source text count. Each fill job translates {{$d.User.Name}}'s missing strings in one language, saved as suggestions, with a cost limit of ${{$d.MaxCost}}.
+<p class="muted small">Missing strings have no translation{{if .Multi}} in {{$d.File.Name}}{{end}}. Only suggestions for the current source text count. Each fill job translates {{$d.User.Name}}'s missing strings in one language, saved as suggestions, with a cost limit of ${{$d.MaxCost}}.
   Promoting makes {{$d.User.Name}}'s suggestions the translations of missing and outdated strings, unapproved, so proofreaders find them under <em>unapproved</em>.</p>
 <form method="post" action="{{base}}/admin/ai/fill" data-pick>
   <input type="hidden" name="user" value="{{$d.User.ID}}">
+  <input type="hidden" name="file" value="{{$d.File.Name}}">
   <table class="runs fill">
     <thead><tr><th><input type="checkbox" aria-label="Select all" data-pick-all hidden></th><th>Language</th><th>Missing</th><th>No suggestion from {{$d.User.Name}}</th><th>No suggestion from any AI</th><th>To promote</th><th></th></tr></thead>
     <tbody>
@@ -32,7 +40,7 @@
     <tr>
       {{$fill := and $d.Enabled (gt .NotByAI 0)}}
       <td>{{if not $run}}<input type="checkbox" name="lang" value="{{.Lang}}" aria-label="{{langName .Lang}}" data-fill="{{if $fill}}1{{else}}0{{end}}" data-promote="{{.Promotable}}" {{if not (or $fill .Promotable)}}disabled{{end}}>{{end}}</td>
-      <td><a href="{{base}}/t/{{.Lang}}">{{langName .Lang}}</a> <code>{{.Lang}}</code></td>
+      <td><a href="{{base}}/t/{{.Lang}}{{if $.Multi}}{{query "file" $d.File.Name}}{{end}}">{{langName .Lang}}</a> <code>{{.Lang}}</code></td>
       <td {{if not .Missing}}class="muted"{{end}}>{{.Missing}}</td>
       <td {{if not .NotByAI}}class="muted"{{end}}>{{.NotByAI}}</td>
       <td {{if not .NotByAny}}class="muted"{{end}}>{{.NotByAny}}</td>

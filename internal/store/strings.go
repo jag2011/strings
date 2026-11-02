@@ -8,8 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/jag2011/strings/internal/arb"
@@ -57,24 +58,16 @@ type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-func revision(ctx context.Context, q querier) (int, error) {
-	var v string
-	err := q.QueryRowContext(ctx, "SELECT value FROM settings WHERE key = 'source_revision'").Scan(&v)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, nil
-	}
-	n, _ := strconv.Atoi(v)
-	return n, err
-}
-
-func diffSource(ctx context.Context, q querier, f *arb.File) (*SourceDiff, error) {
+// diffSource compares f with the source strings of a file, or of a new file
+// for file 0.
+func diffSource(ctx context.Context, q querier, file int64, f *arb.File) (*SourceDiff, error) {
 	type old struct {
 		text, hash, meta string
 		position         int
 		draft            bool
 	}
 	existing := map[string]old{} // keys not removed
-	rows, err := q.QueryContext(ctx, "SELECT key, text, hash, coalesce(meta, ''), position, draft FROM source_strings WHERE removed = 0")
+	rows, err := q.QueryContext(ctx, "SELECT key, text, hash, coalesce(meta, ''), position, draft FROM source_strings WHERE file_id = ? AND removed = 0", file)
 	if err != nil {
 		return nil, err
 	}
@@ -93,8 +86,12 @@ func diffSource(ctx context.Context, q querier, f *arb.File) (*SourceDiff, error
 	}
 
 	d := &SourceDiff{}
-	if d.Revision, err = revision(ctx, q); err != nil {
-		return nil, err
+	if file != 0 {
+		if err := q.QueryRowContext(ctx, "SELECT revision FROM files WHERE id = ?", file).Scan(&d.Revision); errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		} else if err != nil {
+			return nil, err
+		}
 	}
 	seen := map[string]bool{}
 	for i, m := range f.Messages {
@@ -107,7 +104,7 @@ func diffSource(ctx context.Context, q querier, f *arb.File) (*SourceDiff, error
 		case o.hash != hash:
 			c := Change{Key: m.Key, Old: o.text, New: m.Text, OldHash: o.hash, NewHash: hash, WasDraft: o.draft}
 			if err := q.QueryRowContext(ctx, `SELECT count(*) FROM translations t JOIN languages l ON l.code = t.lang
-				WHERE t.key = ?`, m.Key).Scan(&c.Translations); err != nil {
+				WHERE t.file_id = ? AND t.key = ?`, file, m.Key).Scan(&c.Translations); err != nil {
 				return nil, err
 			}
 			d.Changed = append(d.Changed, c)
@@ -128,91 +125,113 @@ func diffSource(ctx context.Context, q querier, f *arb.File) (*SourceDiff, error
 	return d, nil
 }
 
-// PreviewSource returns what ImportSource would change, without changing it.
-func (s *Store) PreviewSource(ctx context.Context, f *arb.File) (*SourceDiff, error) {
-	return diffSource(ctx, s.r, f)
+// PreviewSource returns what ImportSource would change in a file, without
+// changing it. For file 0, a new file, everything is added.
+func (s *Store) PreviewSource(ctx context.Context, file int64, f *arb.File) (*SourceDiff, error) {
+	return diffSource(ctx, s.r, file, f)
 }
 
-// ImportSource makes f the source strings. Keys missing from f are marked
-// removed: they are kept for history but no longer exported. decide says per
-// changed key what happens to its translations; keys not in it (or a nil
-// map) get OutdateTranslations. The revision goes up if anything changed.
-func (s *Store) ImportSource(ctx context.Context, f *arb.File, decide map[string]string) (SourceResult, error) {
+// ImportSource makes f the source strings of a file. Keys missing from f are
+// marked removed: they are kept for history but no longer exported. Other
+// files aren't touched. decide says per changed key what happens to its
+// translations; keys not in it (or a nil map) get OutdateTranslations. The
+// file's revision goes up if anything changed.
+func (s *Store) ImportSource(ctx context.Context, file int64, f *arb.File, decide map[string]string) (SourceResult, error) {
 	var res SourceResult
-	err := s.tx(ctx, func(tx *sql.Tx) error {
-		d, err := diffSource(ctx, tx, f)
-		if err != nil {
-			return err
-		}
-		res.Added, res.Changed, res.Removed, res.Unchanged = len(d.Added), len(d.Changed), len(d.Removed), d.Unchanged
-		res.Revision = d.Revision
-
-		for i, m := range f.Messages {
-			var meta any
-			if len(m.Meta) > 0 {
-				meta = string(m.Meta)
-			}
-			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO source_strings (key, text, hash, meta, draft, position, removed) VALUES (?, ?, ?, ?, ?, ?, 0)
-				ON CONFLICT (key) DO UPDATE SET
-					text = excluded.text, hash = excluded.hash, meta = excluded.meta, draft = excluded.draft,
-					position = excluded.position, removed = 0,
-					updated_at = CASE WHEN source_strings.hash != excluded.hash OR source_strings.removed
-						THEN datetime('now') ELSE source_strings.updated_at END`,
-				m.Key, m.Text, sourceHash(m.Text), meta, arb.Draft(m.Meta), i); err != nil {
-				return err
-			}
-		}
-		for _, k := range d.Removed {
-			if _, err := tx.ExecContext(ctx, "UPDATE source_strings SET removed = 1, updated_at = datetime('now') WHERE key = ?", k); err != nil {
-				return err
-			}
-		}
-		for _, c := range d.Changed {
-			var err error
-			switch decide[c.Key] {
-			case KeepTranslations:
-				// Only translations that were up to date; outdated ones stay outdated.
-				res.Kept++
-				_, err = tx.ExecContext(ctx, "UPDATE translations SET source_hash = ? WHERE key = ? AND source_hash = ?", c.NewHash, c.Key, c.OldHash)
-			case RemoveTranslations:
-				res.Cleared++
-				if err = logSourceUnapproval(ctx, tx, c.Key); err == nil {
-					_, err = tx.ExecContext(ctx, "DELETE FROM translations WHERE key = ?", c.Key)
-				}
-			default:
-				// Approval was for the old source text.
-				res.Outdated++
-				if err = logSourceUnapproval(ctx, tx, c.Key); err == nil {
-					_, err = tx.ExecContext(ctx, "UPDATE translations SET approved_by = NULL, approved_at = NULL WHERE key = ?", c.Key)
-				}
-			}
-			if err == nil && decide[c.Key] != KeepTranslations {
-				// Suggestions were made for the old source text.
-				_, err = tx.ExecContext(ctx, "DELETE FROM suggestions WHERE key = ?", c.Key)
-			}
-			if err != nil {
-				return err
-			}
-		}
-		set := map[string]string{
-			"arb_locale":           boolSetting(f.Locale != ""),
-			"arb_trailing_newline": boolSetting(f.TrailingNewline),
-		}
-		if d.Modified {
-			res.Revision++
-			set["source_revision"] = strconv.Itoa(res.Revision)
-		}
-		return setSettings(ctx, tx, set)
+	err := s.tx(ctx, func(tx *sql.Tx) (err error) {
+		res, err = importSource(ctx, tx, file, f, decide)
+		return err
 	})
 	return res, err
 }
 
-func boolSetting(b bool) string {
-	if b {
-		return "1"
+// ImportNewSource creates a file, as Target.File of a new target describes
+// it, and imports its source strings.
+func (s *Store) ImportNewSource(ctx context.Context, file File, f *arb.File) (File, SourceResult, error) {
+	var res SourceResult
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		id, err := createFile(ctx, tx, file)
+		if err != nil {
+			return err
+		}
+		res, err = importSource(ctx, tx, id, f, nil)
+		file.ID = id
+		return err
+	})
+	if err != nil {
+		return file, res, err
 	}
-	return "0"
+	file, err = s.File(ctx, file.ID)
+	return file, res, err
+}
+
+func importSource(ctx context.Context, tx *sql.Tx, file int64, f *arb.File, decide map[string]string) (SourceResult, error) {
+	var res SourceResult
+	if file == 0 {
+		return res, ErrNotFound
+	}
+	d, err := diffSource(ctx, tx, file, f)
+	if err != nil {
+		return res, err
+	}
+	res.Added, res.Changed, res.Removed, res.Unchanged = len(d.Added), len(d.Changed), len(d.Removed), d.Unchanged
+	res.Revision = d.Revision
+
+	for i, m := range f.Messages {
+		var meta any
+		if len(m.Meta) > 0 {
+			meta = string(m.Meta)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO source_strings (file_id, key, text, hash, meta, draft, position, removed) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+			ON CONFLICT (file_id, key) DO UPDATE SET
+				text = excluded.text, hash = excluded.hash, meta = excluded.meta, draft = excluded.draft,
+				position = excluded.position, removed = 0,
+				updated_at = CASE WHEN source_strings.hash != excluded.hash OR source_strings.removed
+					THEN datetime('now') ELSE source_strings.updated_at END`,
+			file, m.Key, m.Text, sourceHash(m.Text), meta, arb.Draft(m.Meta), i); err != nil {
+			return res, err
+		}
+	}
+	for _, k := range d.Removed {
+		if _, err := tx.ExecContext(ctx, "UPDATE source_strings SET removed = 1, updated_at = datetime('now') WHERE file_id = ? AND key = ?", file, k); err != nil {
+			return res, err
+		}
+	}
+	for _, c := range d.Changed {
+		var err error
+		switch decide[c.Key] {
+		case KeepTranslations:
+			// Only translations that were up to date; outdated ones stay outdated.
+			res.Kept++
+			_, err = tx.ExecContext(ctx, "UPDATE translations SET source_hash = ? WHERE file_id = ? AND key = ? AND source_hash = ?",
+				c.NewHash, file, c.Key, c.OldHash)
+		case RemoveTranslations:
+			res.Cleared++
+			if err = logSourceUnapproval(ctx, tx, file, c.Key); err == nil {
+				_, err = tx.ExecContext(ctx, "DELETE FROM translations WHERE file_id = ? AND key = ?", file, c.Key)
+			}
+		default:
+			// Approval was for the old source text.
+			res.Outdated++
+			if err = logSourceUnapproval(ctx, tx, file, c.Key); err == nil {
+				_, err = tx.ExecContext(ctx, "UPDATE translations SET approved_by = NULL, approved_at = NULL WHERE file_id = ? AND key = ?", file, c.Key)
+			}
+		}
+		if err == nil && decide[c.Key] != KeepTranslations {
+			// Suggestions were made for the old source text.
+			_, err = tx.ExecContext(ctx, "DELETE FROM suggestions WHERE file_id = ? AND key = ?", file, c.Key)
+		}
+		if err != nil {
+			return res, err
+		}
+	}
+	if d.Modified {
+		res.Revision++
+	}
+	_, err = tx.ExecContext(ctx, "UPDATE files SET revision = ?, arb_locale = ?, trailing_newline = ? WHERE id = ?",
+		res.Revision, f.Locale != "", f.TrailingNewline, file)
+	return res, err
 }
 
 type TranslationResult struct {
@@ -226,21 +245,28 @@ type TranslationResult struct {
 	Warned                    []string // imported, but with warnings like an unused placeholder
 }
 
-// ImportTranslations seeds a language from an existing ARB file. Imported
-// texts count as up to date with the current source. Texts edited or approved
-// in strings are never overwritten, and texts it had before never come back.
-func (s *Store) ImportTranslations(ctx context.Context, lang string, f *arb.File) (TranslationResult, error) {
+// ImportTranslations seeds a language of a file from an existing ARB file.
+// Imported texts count as up to date with the current source. Texts edited
+// or approved in strings are never overwritten, and texts it had before
+// never come back. Keys of other files are unknown.
+func (s *Store) ImportTranslations(ctx context.Context, file int64, lang string, f *arb.File) (TranslationResult, error) {
 	var res TranslationResult
 	if !arb.ValidLocale(lang) {
 		return res, fmt.Errorf("invalid language code %q", lang)
 	}
 	err := s.tx(ctx, func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(ctx, "SELECT 1 FROM files WHERE id = ?", file).Scan(new(int)); errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		} else if err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO languages (code) VALUES (?)", lang); err != nil {
 			return err
 		}
 		for _, m := range f.Messages {
 			var srcText, hash string
-			err := tx.QueryRowContext(ctx, "SELECT text, hash FROM source_strings WHERE key = ? AND removed = 0", m.Key).Scan(&srcText, &hash)
+			err := tx.QueryRowContext(ctx, "SELECT text, hash FROM source_strings WHERE file_id = ? AND key = ? AND removed = 0",
+				file, m.Key).Scan(&srcText, &hash)
 			if errors.Is(err, sql.ErrNoRows) {
 				res.Unknown = append(res.Unknown, m.Key)
 				continue
@@ -253,8 +279,8 @@ func (s *Store) ImportTranslations(ctx context.Context, lang string, f *arb.File
 			}
 			var curText, curOrigin string
 			var approved bool
-			err = tx.QueryRowContext(ctx, "SELECT text, origin, approved_by IS NOT NULL FROM translations WHERE lang = ? AND key = ?",
-				lang, m.Key).Scan(&curText, &curOrigin, &approved)
+			err = tx.QueryRowContext(ctx, "SELECT text, origin, approved_by IS NOT NULL FROM translations WHERE lang = ? AND file_id = ? AND key = ?",
+				lang, file, m.Key).Scan(&curText, &curOrigin, &approved)
 			found := err == nil
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err
@@ -269,7 +295,7 @@ func (s *Store) ImportTranslations(ctx context.Context, lang string, f *arb.File
 					res.Unchanged++
 					continue
 				case found && curText == m.Text:
-					if _, err := tx.ExecContext(ctx, "DELETE FROM translations WHERE lang = ? AND key = ?", lang, m.Key); err != nil {
+					if _, err := tx.ExecContext(ctx, "DELETE FROM translations WHERE lang = ? AND file_id = ? AND key = ?", lang, file, m.Key); err != nil {
 						return err
 					}
 				}
@@ -283,8 +309,8 @@ func (s *Store) ImportTranslations(ctx context.Context, lang string, f *arb.File
 			// A version from the history was replaced or removed here since,
 			// e.g. when the source text changed. The file predates that.
 			var stale bool
-			if err := tx.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM history WHERE lang = ? AND key = ? AND text = ?)",
-				lang, m.Key, m.Text).Scan(&stale); err != nil {
+			if err := tx.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM history WHERE lang = ? AND file_id = ? AND key = ? AND text = ?)",
+				lang, file, m.Key, m.Text).Scan(&stale); err != nil {
 				return err
 			}
 			if stale {
@@ -308,7 +334,7 @@ func (s *Store) ImportTranslations(ctx context.Context, lang string, f *arb.File
 			default:
 				res.Updated++
 			}
-			if err := write(ctx, tx, lang, m.Key, m.Text, hash, "import", 0); err != nil {
+			if err := write(ctx, tx, file, lang, m.Key, m.Text, hash, "import", 0); err != nil {
 				return err
 			}
 		}
@@ -318,38 +344,38 @@ func (s *Store) ImportTranslations(ctx context.Context, lang string, f *arb.File
 }
 
 // write adds a history row and makes it the current translation.
-func write(ctx context.Context, tx *sql.Tx, lang, key, text, hash, origin string, userID int64) error {
+func write(ctx context.Context, tx *sql.Tx, file int64, lang, key, text, hash, origin string, userID int64) error {
 	uid := sql.NullInt64{Int64: userID, Valid: userID != 0}
 	var hid int64
 	if err := tx.QueryRowContext(ctx, `
-		INSERT INTO history (lang, key, text, source_hash, origin, user_id) VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
-		lang, key, text, hash, origin, uid).Scan(&hid); err != nil {
+		INSERT INTO history (lang, file_id, key, text, source_hash, origin, user_id) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+		lang, file, key, text, hash, origin, uid).Scan(&hid); err != nil {
 		return err
 	}
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO translations (lang, key, text, source_hash, origin, user_id, history_id) VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (lang, key) DO UPDATE SET
+		INSERT INTO translations (lang, file_id, key, text, source_hash, origin, user_id, history_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (lang, file_id, key) DO UPDATE SET
 			text = excluded.text, source_hash = excluded.source_hash, origin = excluded.origin,
 			user_id = excluded.user_id, history_id = excluded.history_id, updated_at = datetime('now')`,
-		lang, key, text, hash, origin, uid, hid)
+		lang, file, key, text, hash, origin, uid, hid)
 	return err
 }
 
 // logApproval records an approval change of the current translation.
-func logApproval(ctx context.Context, tx *sql.Tx, lang, key string, approved bool, userID int64) error {
+func logApproval(ctx context.Context, tx *sql.Tx, file int64, lang, key string, approved bool, userID int64) error {
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO approval_log (lang, key, approved, history_id, user_id)
-		SELECT lang, key, ?, history_id, ? FROM translations WHERE lang = ? AND key = ?`,
-		approved, userID, lang, key)
+		INSERT INTO approval_log (lang, file_id, key, approved, history_id, user_id)
+		SELECT lang, file_id, key, ?, history_id, ? FROM translations WHERE lang = ? AND file_id = ? AND key = ?`,
+		approved, userID, lang, file, key)
 	return err
 }
 
 // logSourceUnapproval records that a source change removes the approvals of
 // a key's translations.
-func logSourceUnapproval(ctx context.Context, tx *sql.Tx, key string) error {
+func logSourceUnapproval(ctx context.Context, tx *sql.Tx, file int64, key string) error {
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO approval_log (lang, key, approved, history_id)
-		SELECT lang, key, 0, history_id FROM translations WHERE key = ? AND approved_by IS NOT NULL`, key)
+		INSERT INTO approval_log (lang, file_id, key, approved, history_id)
+		SELECT lang, file_id, key, 0, history_id FROM translations WHERE file_id = ? AND key = ? AND approved_by IS NOT NULL`, file, key)
 	return err
 }
 
@@ -373,9 +399,9 @@ const (
 // skips the check. Saving the unchanged text of an outdated translation marks
 // it up to date. Changing an approved translation without Unapprove returns
 // ErrApproved. saved reports whether the text or the approval changed.
-func (s *Store) Save(ctx context.Context, lang, key, text string, userID, base int64, approval Approval) (saved bool, err error) {
+func (s *Store) Save(ctx context.Context, file int64, lang, key, text string, userID, base int64, approval Approval) (saved bool, err error) {
 	err = s.tx(ctx, func(tx *sql.Tx) (err error) {
-		saved, err = save(ctx, tx, lang, key, text, "user", userID, userID, base, approval)
+		saved, err = save(ctx, tx, file, lang, key, text, "user", userID, userID, base, approval)
 		return err
 	})
 	return saved, err
@@ -383,10 +409,10 @@ func (s *Store) Save(ctx context.Context, lang, key, text string, userID, base i
 
 // save is Save for text written by author with the given origin. The
 // approval is changed by actor.
-func save(ctx context.Context, tx *sql.Tx, lang, key, text, origin string, author, actor, base int64, approval Approval) (saved bool, err error) {
+func save(ctx context.Context, tx *sql.Tx, file int64, lang, key, text, origin string, author, actor, base int64, approval Approval) (saved bool, err error) {
 	err = func() error {
 		var hash string
-		err := tx.QueryRowContext(ctx, "SELECT hash FROM source_strings WHERE key = ? AND removed = 0 AND draft = 0", key).Scan(&hash)
+		err := tx.QueryRowContext(ctx, "SELECT hash FROM source_strings WHERE file_id = ? AND key = ? AND removed = 0 AND draft = 0", file, key).Scan(&hash)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		} else if err != nil {
@@ -395,8 +421,8 @@ func save(ctx context.Context, tx *sql.Tx, lang, key, text, origin string, autho
 		var curID int64
 		var curText, curHash string
 		var approved bool
-		err = tx.QueryRowContext(ctx, "SELECT history_id, text, source_hash, approved_by IS NOT NULL FROM translations WHERE lang = ? AND key = ?",
-			lang, key).Scan(&curID, &curText, &curHash, &approved)
+		err = tx.QueryRowContext(ctx, "SELECT history_id, text, source_hash, approved_by IS NOT NULL FROM translations WHERE lang = ? AND file_id = ? AND key = ?",
+			lang, file, key).Scan(&curID, &curText, &curHash, &approved)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -412,26 +438,26 @@ func save(ctx context.Context, tx *sql.Tx, lang, key, text, origin string, autho
 		}
 		if approved && approval == Unapprove {
 			saved = true
-			if err := logApproval(ctx, tx, lang, key, false, actor); err != nil {
+			if err := logApproval(ctx, tx, file, lang, key, false, actor); err != nil {
 				return err
 			}
-			if _, err := tx.ExecContext(ctx, "UPDATE translations SET approved_by = NULL, approved_at = NULL WHERE lang = ? AND key = ?", lang, key); err != nil {
+			if _, err := tx.ExecContext(ctx, "UPDATE translations SET approved_by = NULL, approved_at = NULL WHERE lang = ? AND file_id = ? AND key = ?", lang, file, key); err != nil {
 				return err
 			}
 		}
 		if !unchanged {
 			saved = true
-			if err := write(ctx, tx, lang, key, text, hash, origin, author); err != nil {
+			if err := write(ctx, tx, file, lang, key, text, hash, origin, author); err != nil {
 				return err
 			}
 		}
 		if approval == Approve && (!approved || !unchanged) {
 			saved = true
-			if _, err := tx.ExecContext(ctx, "UPDATE translations SET approved_by = ?, approved_at = datetime('now') WHERE lang = ? AND key = ?",
-				actor, lang, key); err != nil {
+			if _, err := tx.ExecContext(ctx, "UPDATE translations SET approved_by = ?, approved_at = datetime('now') WHERE lang = ? AND file_id = ? AND key = ?",
+				actor, lang, file, key); err != nil {
 				return err
 			}
-			return logApproval(ctx, tx, lang, key, true, actor)
+			return logApproval(ctx, tx, file, lang, key, true, actor)
 		}
 		return nil
 	}()
@@ -439,15 +465,16 @@ func save(ctx context.Context, tx *sql.Tx, lang, key, text, origin string, autho
 }
 
 // Revert makes an older version current again, as a new history entry.
-func (s *Store) Revert(ctx context.Context, lang, key string, historyID, userID int64) error {
+func (s *Store) Revert(ctx context.Context, file int64, lang, key string, historyID, userID int64) error {
 	var text string
-	err := s.r.QueryRowContext(ctx, "SELECT text FROM history WHERE id = ? AND lang = ? AND key = ?", historyID, lang, key).Scan(&text)
+	err := s.r.QueryRowContext(ctx, "SELECT text FROM history WHERE id = ? AND lang = ? AND file_id = ? AND key = ?",
+		historyID, lang, file, key).Scan(&text)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	} else if err != nil {
 		return err
 	}
-	_, err = s.Save(ctx, lang, key, text, userID, -1, KeepApproval)
+	_, err = s.Save(ctx, file, lang, key, text, userID, -1, KeepApproval)
 	return err
 }
 
@@ -459,11 +486,11 @@ var ErrForbidden = errors.New("not allowed")
 // newest remaining one current, without approval, or removes the translation
 // when none is left. Only proofreaders and admins can delete the current
 // version of an approved translation.
-func (s *Store) DeleteVersion(ctx context.Context, lang, key string, historyID int64, u *User) error {
+func (s *Store) DeleteVersion(ctx context.Context, file int64, lang, key string, historyID int64, u *User) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
 		var author sql.NullInt64
-		err := tx.QueryRowContext(ctx, "SELECT user_id FROM history WHERE id = ? AND lang = ? AND key = ?",
-			historyID, lang, key).Scan(&author)
+		err := tx.QueryRowContext(ctx, "SELECT user_id FROM history WHERE id = ? AND lang = ? AND file_id = ? AND key = ?",
+			historyID, lang, file, key).Scan(&author)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		} else if err != nil {
@@ -474,8 +501,8 @@ func (s *Store) DeleteVersion(ctx context.Context, lang, key string, historyID i
 		}
 		var curID int64
 		var approved bool
-		err = tx.QueryRowContext(ctx, "SELECT history_id, approved_by IS NOT NULL FROM translations WHERE lang = ? AND key = ?",
-			lang, key).Scan(&curID, &approved)
+		err = tx.QueryRowContext(ctx, "SELECT history_id, approved_by IS NOT NULL FROM translations WHERE lang = ? AND file_id = ? AND key = ?",
+			lang, file, key).Scan(&curID, &approved)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -486,15 +513,16 @@ func (s *Store) DeleteVersion(ctx context.Context, lang, key string, historyID i
 			res, err := tx.ExecContext(ctx, `
 				UPDATE translations SET (text, source_hash, origin, user_id, history_id) = (
 					SELECT text, source_hash, origin, user_id, id FROM history
-					WHERE lang = ?1 AND key = ?2 AND id != ?3 ORDER BY id DESC LIMIT 1),
+					WHERE lang = ?1 AND file_id = ?4 AND key = ?2 AND id != ?3 ORDER BY id DESC LIMIT 1),
 					approved_by = NULL, approved_at = NULL, updated_at = datetime('now')
-				WHERE lang = ?1 AND key = ?2 AND EXISTS (SELECT 1 FROM history WHERE lang = ?1 AND key = ?2 AND id != ?3)`,
-				lang, key, historyID)
+				WHERE lang = ?1 AND file_id = ?4 AND key = ?2
+					AND EXISTS (SELECT 1 FROM history WHERE lang = ?1 AND file_id = ?4 AND key = ?2 AND id != ?3)`,
+				lang, key, historyID, file)
 			if err != nil {
 				return err
 			}
 			if n, _ := res.RowsAffected(); n == 0 {
-				if _, err := tx.ExecContext(ctx, "DELETE FROM translations WHERE lang = ? AND key = ?", lang, key); err != nil {
+				if _, err := tx.ExecContext(ctx, "DELETE FROM translations WHERE lang = ? AND file_id = ? AND key = ?", lang, file, key); err != nil {
 					return err
 				}
 			}
@@ -524,7 +552,7 @@ func (s *Store) DeleteUserVersions(ctx context.Context, userID int64, lang strin
 			return err
 		}
 		const doomed = "(SELECT value FROM json_each(?1))"
-		const rest = "FROM history h WHERE h.lang = translations.lang AND h.key = translations.key AND h.id NOT IN " + doomed
+		const rest = "FROM history h WHERE h.lang = translations.lang AND h.file_id = translations.file_id AND h.key = translations.key AND h.id NOT IN " + doomed
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE translations SET (text, source_hash, origin, user_id, history_id) = (
 				SELECT text, source_hash, origin, user_id, id `+rest+` ORDER BY h.id DESC LIMIT 1),
@@ -578,16 +606,25 @@ func (l LangStats) ApprovedPercent() int {
 	return l.Approved * 100 / l.Total
 }
 
-// Stats counts per language. Human = up-to-date strings written by people
-// (imported or edited here), as opposed to machine translations. Drafts are
-// not counted.
-func (s *Store) Stats(ctx context.Context) ([]LangStats, error) {
+// fileSQL limits a query on source_strings s to one file; file 0 is all.
+func fileSQL(file int64) (string, []any) {
+	if file == 0 {
+		return "", nil
+	}
+	return " AND s.file_id = ?", []any{file}
+}
+
+// Stats counts per language, in one file or (file 0) in all. Human =
+// up-to-date strings written by people (imported or edited here), as
+// opposed to machine translations. Drafts are not counted.
+func (s *Store) Stats(ctx context.Context, file int64) ([]LangStats, error) {
 	langs, err := s.Languages(ctx)
 	if err != nil {
 		return nil, err
 	}
+	inFile, fargs := fileSQL(file)
 	var total int
-	if err := s.r.QueryRowContext(ctx, "SELECT count(*) FROM source_strings WHERE removed = 0 AND draft = 0").Scan(&total); err != nil {
+	if err := s.r.QueryRowContext(ctx, "SELECT count(*) FROM source_strings s WHERE s.removed = 0 AND s.draft = 0"+inFile, fargs...).Scan(&total); err != nil {
 		return nil, err
 	}
 	byLang := map[string]*LangStats{}
@@ -601,8 +638,9 @@ func (s *Store) Stats(ctx context.Context) ([]LangStats, error) {
 			coalesce(sum(t.source_hash != s.hash), 0),
 			coalesce(sum(t.source_hash = s.hash AND t.origin != 'machine'), 0),
 			coalesce(sum(t.source_hash = s.hash AND t.approved_by IS NOT NULL), 0)
-		FROM translations t JOIN source_strings s ON s.key = t.key AND s.removed = 0 AND s.draft = 0
-		GROUP BY t.lang`)
+		FROM translations t JOIN source_strings s ON s.file_id = t.file_id AND s.key = t.key AND s.removed = 0 AND s.draft = 0
+		WHERE 1`+inFile+`
+		GROUP BY t.lang`, fargs...)
 	if err != nil {
 		return nil, err
 	}
@@ -644,21 +682,34 @@ func filterSQL(filter string) string {
 	return "1"
 }
 
-// FilterCounts returns the number of strings matching q under each filter.
-func (s *Store) FilterCounts(ctx context.Context, lang, q string) (map[string]int, error) {
+// joinTranslation joins the translations t of language ? to source strings s.
+const joinTranslation = " LEFT JOIN translations t ON t.file_id = s.file_id AND t.key = s.key AND t.lang = ?"
+
+// FilterCounts returns the number of strings matching q under each filter,
+// in one file or (file 0) in all.
+func (s *Store) FilterCounts(ctx context.Context, file int64, lang, q string) (map[string]int, error) {
 	search, sargs := searchSQL(q)
+	inFile, fargs := fileSQL(file)
 	var todo, unapproved, all int
 	err := s.r.QueryRowContext(ctx, `SELECT
 		coalesce(sum(`+filterSQL(FilterTodo)+`), 0),
 		coalesce(sum(`+filterSQL(FilterUnapproved)+`), 0),
 		count(*)
-		FROM source_strings s LEFT JOIN translations t ON t.key = s.key AND t.lang = ?
-		WHERE s.removed = 0 AND s.draft = 0`+search, append([]any{lang}, sargs...)...).Scan(&todo, &unapproved, &all)
+		FROM source_strings s`+joinTranslation+`
+		WHERE s.removed = 0 AND s.draft = 0`+inFile+search, append(append([]any{lang}, fargs...), sargs...)...).Scan(&todo, &unapproved, &all)
 	return map[string]int{FilterTodo: todo, FilterUnapproved: unapproved, FilterAll: all}, err
 }
 
+// Ref names a string: its file and key.
+type Ref struct {
+	FileID int64
+	File   string // the file's name
+	Key    string
+}
+
 type Row struct {
-	Key, Source  string
+	Ref
+	Source       string
 	Position     int
 	Text         string // empty when missing
 	Origin       string
@@ -686,18 +737,21 @@ func (r Row) State() string {
 }
 
 const rowSelect = `
-	SELECT s.key, s.text, s.position, coalesce(t.text, ''), coalesce(t.origin, ''), coalesce(t.history_id, 0),
+	SELECT s.file_id, f.name, s.key, s.text, s.position, coalesce(t.text, ''), coalesce(t.origin, ''), coalesce(t.history_id, 0),
 		coalesce(t.user_id, 0), coalesce(u.name, ''), coalesce(t.updated_at, ''), t.key IS NOT NULL, coalesce(t.source_hash != s.hash, 0),
 		t.approved_by IS NOT NULL, coalesce(a.name, ''), coalesce(t.approved_by, 0), coalesce(t.approved_at, '')
 	FROM source_strings s
-	LEFT JOIN translations t ON t.key = s.key AND t.lang = ?
+	JOIN files f ON f.id = s.file_id` + joinTranslation + `
 	LEFT JOIN users u ON u.id = t.user_id
 	LEFT JOIN users a ON a.id = t.approved_by`
 
+// stringOrder lists strings by file, then in source order.
+const stringOrder = " ORDER BY f.position, f.id, s.position"
+
 func scanRow(row interface{ Scan(...any) error }) (Row, error) {
 	var r Row
-	err := row.Scan(&r.Key, &r.Source, &r.Position, &r.Text, &r.Origin, &r.HistoryID, &r.UserID, &r.UserName, &r.UpdatedAt, &r.Has, &r.Outdated,
-		&r.Approved, &r.ApprovedBy, &r.ApprovedByID, &r.ApprovedAt)
+	err := row.Scan(&r.FileID, &r.File, &r.Key, &r.Source, &r.Position, &r.Text, &r.Origin, &r.HistoryID, &r.UserID, &r.UserName, &r.UpdatedAt,
+		&r.Has, &r.Outdated, &r.Approved, &r.ApprovedBy, &r.ApprovedByID, &r.ApprovedAt)
 	return r, err
 }
 
@@ -709,18 +763,19 @@ func searchSQL(q string) (string, []any) {
 	return ` AND (s.key LIKE ? ESCAPE '\' OR s.text LIKE ? ESCAPE '\' OR t.text LIKE ? ESCAPE '\')`, []any{like, like, like}
 }
 
-// List returns one page of strings and the number of matches.
-func (s *Store) List(ctx context.Context, lang, filter, q string, offset, limit int) ([]Row, int, error) {
-	where := " WHERE s.removed = 0 AND s.draft = 0 AND " + filterSQL(filter)
+// List returns one page of strings and the number of matches, in one file
+// or (file 0) in all, in file order.
+func (s *Store) List(ctx context.Context, file int64, lang, filter, q string, offset, limit int) ([]Row, int, error) {
+	inFile, fargs := fileSQL(file)
+	where := " WHERE s.removed = 0 AND s.draft = 0 AND " + filterSQL(filter) + inFile
 	search, sargs := searchSQL(q)
-	args := append([]any{lang}, sargs...)
+	args := append(append([]any{lang}, fargs...), sargs...)
 
 	var count int
-	if err := s.r.QueryRowContext(ctx, `SELECT count(*) FROM source_strings s
-		LEFT JOIN translations t ON t.key = s.key AND t.lang = ?`+where+search, args...).Scan(&count); err != nil {
+	if err := s.r.QueryRowContext(ctx, `SELECT count(*) FROM source_strings s`+joinTranslation+where+search, args...).Scan(&count); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.r.QueryContext(ctx, rowSelect+where+search+" ORDER BY s.position LIMIT ? OFFSET ?",
+	rows, err := s.r.QueryContext(ctx, rowSelect+where+search+stringOrder+" LIMIT ? OFFSET ?",
 		append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, err
@@ -737,51 +792,59 @@ func (s *Store) List(ctx context.Context, lang, filter, q string, offset, limit 
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
-	counts, err := s.suggestionCounts(ctx, lang)
+	counts, err := s.suggestionCounts(ctx, file, lang)
 	if err != nil {
 		return nil, 0, err
 	}
 	for i := range out {
-		out[i].Suggestions = counts[out[i].Key]
+		out[i].Suggestions = counts[fileKey{out[i].FileID, out[i].Key}]
 	}
 	return out, count, nil
 }
 
-// Next returns the key after position that matches filter and q, wrapping
-// around to the start. Empty if nothing else matches.
-func (s *Store) Next(ctx context.Context, lang, filter, q, currentKey string, position int) (string, error) {
+// Next returns the string after cur that matches filter and q, in one file
+// or (file 0) in all, wrapping around to the start. Its key is empty if
+// nothing else matches.
+func (s *Store) Next(ctx context.Context, file int64, lang, filter, q string, cur Ref) (Ref, error) {
 	search, sargs := searchSQL(q)
-	base := `SELECT s.key FROM source_strings s LEFT JOIN translations t ON t.key = s.key AND t.lang = ?
-		WHERE s.removed = 0 AND s.draft = 0 AND s.key != ? AND ` + filterSQL(filter) + search
-	args := append([]any{lang, currentKey}, sargs...)
-	var key string
-	err := s.r.QueryRowContext(ctx, base+" AND s.position > ? ORDER BY s.position LIMIT 1", append(args, position)...).Scan(&key)
+	inFile, fargs := fileSQL(file)
+	base := `SELECT s.file_id, f.name, s.key FROM source_strings s JOIN files f ON f.id = s.file_id` + joinTranslation + `
+		WHERE s.removed = 0 AND s.draft = 0 AND NOT (s.file_id = ? AND s.key = ?) AND ` + filterSQL(filter) + inFile + search
+	args := append(append([]any{lang, cur.FileID, cur.Key}, fargs...), sargs...)
+	var r Ref
+	err := s.r.QueryRowContext(ctx, base+` AND (f.position, f.id, s.position) > (
+			SELECT cf.position, cf.id, cs.position FROM source_strings cs JOIN files cf ON cf.id = cs.file_id WHERE cs.file_id = ? AND cs.key = ?)`+
+		stringOrder+" LIMIT 1", append(args, cur.FileID, cur.Key)...).Scan(&r.FileID, &r.File, &r.Key)
 	if errors.Is(err, sql.ErrNoRows) {
-		err = s.r.QueryRowContext(ctx, base+" ORDER BY s.position LIMIT 1", args...).Scan(&key)
+		err = s.r.QueryRowContext(ctx, base+stringOrder+" LIMIT 1", args...).Scan(&r.FileID, &r.File, &r.Key)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+		return Ref{}, nil
 	}
-	return key, err
+	return r, err
 }
 
 // KeyState is one line of the editor's key list.
 type KeyState struct {
-	Key      string
+	Ref
 	State    string // missing, outdated or done
 	Approved bool
 	Matches  bool // false for the current key when it falls outside filter and q
 }
 
-// Keys lists the keys matching filter and q in source order, plus current
-// even when it no longer matches, so the editor can show where it is.
-func (s *Store) Keys(ctx context.Context, lang, filter, q, current string) ([]KeyState, error) {
+// Keys lists the strings matching filter and q in one file or (file 0) in
+// all, in file and source order, plus cur even when it no longer matches,
+// so the editor can show where it is.
+func (s *Store) Keys(ctx context.Context, file int64, lang, filter, q string, cur Ref) ([]KeyState, error) {
 	search, sargs := searchSQL(q)
-	match := filterSQL(filter) + search
-	rows, err := s.r.QueryContext(ctx, `SELECT s.key, t.key IS NOT NULL, coalesce(t.source_hash != s.hash, 0), t.approved_by IS NOT NULL, coalesce(`+match+`, 0)
-		FROM source_strings s LEFT JOIN translations t ON t.key = s.key AND t.lang = ?
-		WHERE s.removed = 0 AND s.draft = 0 AND (s.key = ? OR (`+match+`))
-		ORDER BY s.position`, append(append(append([]any{}, sargs...), lang, current), sargs...)...)
+	inFile, fargs := fileSQL(file)
+	match := filterSQL(filter) + inFile + search
+	margs := append(append([]any{}, fargs...), sargs...)
+	rows, err := s.r.QueryContext(ctx, `SELECT s.file_id, f.name, s.key, t.key IS NOT NULL, coalesce(t.source_hash != s.hash, 0),
+			t.approved_by IS NOT NULL, coalesce(`+match+`, 0)
+		FROM source_strings s JOIN files f ON f.id = s.file_id`+joinTranslation+`
+		WHERE s.removed = 0 AND s.draft = 0 AND ((s.file_id = ? AND s.key = ?) OR (`+match+`))`+stringOrder,
+		append(append(append([]any{}, margs...), lang, cur.FileID, cur.Key), margs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -790,11 +853,31 @@ func (s *Store) Keys(ctx context.Context, lang, filter, q, current string) ([]Ke
 	for rows.Next() {
 		var k KeyState
 		var has, outdated bool
-		if err := rows.Scan(&k.Key, &has, &outdated, &k.Approved, &k.Matches); err != nil {
+		if err := rows.Scan(&k.FileID, &k.File, &k.Key, &has, &outdated, &k.Approved, &k.Matches); err != nil {
 			return nil, err
 		}
 		k.State = Row{Has: has, Outdated: outdated}.State()
 		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// FindKey returns the strings with a key, in file order, for links that
+// don't name the file.
+func (s *Store) FindKey(ctx context.Context, key string) ([]Ref, error) {
+	rows, err := s.r.QueryContext(ctx, `SELECT s.file_id, f.name, s.key FROM source_strings s JOIN files f ON f.id = s.file_id
+		WHERE s.key = ? AND s.removed = 0 AND s.draft = 0`+stringOrder, key)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Ref
+	for rows.Next() {
+		var r Ref
+		if err := rows.Scan(&r.FileID, &r.File, &r.Key); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
 	}
 	return out, rows.Err()
 }
@@ -818,8 +901,8 @@ type Version struct {
 	ForOldText bool // written for an earlier source text
 }
 
-func (s *Store) Entry(ctx context.Context, lang, key string) (*Entry, error) {
-	r, err := scanRow(s.r.QueryRowContext(ctx, rowSelect+" WHERE s.key = ? AND s.removed = 0 AND s.draft = 0", lang, key))
+func (s *Store) Entry(ctx context.Context, file int64, lang, key string) (*Entry, error) {
+	r, err := scanRow(s.r.QueryRowContext(ctx, rowSelect+" WHERE s.file_id = ? AND s.key = ? AND s.removed = 0 AND s.draft = 0", lang, file, key))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	} else if err != nil {
@@ -828,7 +911,8 @@ func (s *Store) Entry(ctx context.Context, lang, key string) (*Entry, error) {
 	e := &Entry{Row: r}
 	var meta sql.NullString
 	var hash string
-	if err := s.r.QueryRowContext(ctx, "SELECT meta, updated_at, hash FROM source_strings WHERE key = ?", key).Scan(&meta, &e.SourceSince, &hash); err != nil {
+	if err := s.r.QueryRowContext(ctx, "SELECT meta, updated_at, hash FROM source_strings WHERE file_id = ? AND key = ?",
+		file, key).Scan(&meta, &e.SourceSince, &hash); err != nil {
 		return nil, err
 	}
 	if meta.Valid {
@@ -837,7 +921,7 @@ func (s *Store) Entry(ctx context.Context, lang, key string) (*Entry, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT h.id, h.text, h.origin, coalesce(h.user_id, 0), coalesce(u.name, ''), h.created_at, h.source_hash != ?
 		FROM history h LEFT JOIN users u ON u.id = h.user_id
-		WHERE h.lang = ? AND h.key = ? ORDER BY h.id DESC LIMIT 50`, hash, lang, key)
+		WHERE h.lang = ? AND h.file_id = ? AND h.key = ? ORDER BY h.id DESC LIMIT 50`, hash, lang, file, key)
 	if err != nil {
 		return nil, err
 	}
@@ -853,30 +937,34 @@ func (s *Store) Entry(ctx context.Context, lang, key string) (*Entry, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	e.Suggestions, err = suggestions(ctx, s.r, lang, key)
+	e.Suggestions, err = suggestions(ctx, s.r, file, lang, key)
 	return e, err
 }
 
-// Export builds the ARB file for a language: keys in source order, missing
-// translations left out (apps fall back to the source language), outdated
-// ones included (stale beats missing). Exporting the source language returns
-// the source strings with their metadata.
-func (s *Store) Export(ctx context.Context, lang string) (*arb.File, error) {
+// Export builds a file's ARB file for a language: keys in source order,
+// missing translations left out (apps fall back to the source language),
+// outdated ones included (stale beats missing). Exporting the source
+// language returns the source strings with their metadata.
+func (s *Store) Export(ctx context.Context, file int64, lang string) (*arb.File, error) {
 	set, err := s.Settings(ctx)
 	if err != nil {
 		return nil, err
 	}
-	f := &arb.File{TrailingNewline: set["arb_trailing_newline"] == "1"}
-	if set["arb_locale"] == "1" {
+	fl, err := s.File(ctx, file)
+	if err != nil {
+		return nil, err
+	}
+	f := &arb.File{TrailingNewline: fl.TrailingNewline}
+	if fl.ARBLocale {
 		f.Locale = lang
 	}
 	var rows *sql.Rows
 	if lang == set["source_lang"] {
-		rows, err = s.r.QueryContext(ctx, "SELECT key, text, coalesce(meta, '') FROM source_strings WHERE removed = 0 ORDER BY position")
+		rows, err = s.r.QueryContext(ctx, "SELECT key, text, coalesce(meta, '') FROM source_strings WHERE file_id = ? AND removed = 0 ORDER BY position", file)
 	} else {
 		rows, err = s.r.QueryContext(ctx, `
-			SELECT s.key, t.text, '' FROM source_strings s JOIN translations t ON t.key = s.key AND t.lang = ?
-			WHERE s.removed = 0 ORDER BY s.position`, lang)
+			SELECT s.key, t.text, '' FROM source_strings s JOIN translations t ON t.file_id = s.file_id AND t.key = s.key AND t.lang = ?
+			WHERE s.file_id = ? AND s.removed = 0 ORDER BY s.position`, lang, file)
 	}
 	if err != nil {
 		return nil, err
@@ -907,7 +995,7 @@ func (s *Store) Contributors(ctx context.Context) (map[string][]Contributor, err
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT t.lang, u.name, count(*) FROM translations t
 		JOIN users u ON u.id = t.user_id
-		JOIN source_strings s ON s.key = t.key AND s.removed = 0
+		JOIN source_strings s ON s.file_id = t.file_id AND s.key = t.key AND s.removed = 0
 		JOIN languages l ON l.code = t.lang
 		GROUP BY t.lang, u.id ORDER BY t.lang, count(*) DESC, u.name`)
 	if err != nil {
@@ -933,7 +1021,7 @@ func (s *Store) TopContributors(ctx context.Context, lang string, limit int) ([]
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT u.id, u.name, count(*) FROM translations t
 		JOIN users u ON u.id = t.user_id
-		JOIN source_strings s ON s.key = t.key AND s.removed = 0
+		JOIN source_strings s ON s.file_id = t.file_id AND s.key = t.key AND s.removed = 0
 		JOIN languages l ON l.code = t.lang
 		WHERE u.unlisted = 0 AND (?1 = '' OR t.lang = ?1)
 		GROUP BY u.id ORDER BY count(*) DESC, u.name LIMIT ?2`, lang, limit)
@@ -962,7 +1050,7 @@ type LangCount struct {
 func (s *Store) UserLanguages(ctx context.Context, userID int64) ([]LangCount, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT t.lang, count(*) FROM translations t
-		JOIN source_strings s ON s.key = t.key AND s.removed = 0
+		JOIN source_strings s ON s.file_id = t.file_id AND s.key = t.key AND s.removed = 0
 		JOIN languages l ON l.code = t.lang
 		WHERE t.user_id = ?
 		GROUP BY t.lang ORDER BY count(*) DESC, t.lang`, userID)
@@ -983,8 +1071,9 @@ func (s *Store) UserLanguages(ctx context.Context, userID int64) ([]LangCount, e
 
 // Activity is an edit or an approval change.
 type Activity struct {
+	Ref
 	Kind      string // "edit", "approved" or "unapproved"
-	Lang, Key string
+	Lang      string
 	Text      string // the new text, or the text whose approval changed
 	Prev      string // edits: the text before
 	HasPrev   bool
@@ -1011,20 +1100,22 @@ func (s *Store) Activity(ctx context.Context, lang string, userID int64, offset,
 	// Approvals come after the edits they were saved with.
 	rows, err := s.r.QueryContext(ctx, `
 		WITH page AS (
-			SELECT 0 AS src, h.id, 'edit' AS kind, h.lang, h.key, h.id AS history_id, h.origin, h.user_id, h.created_at
+			SELECT 0 AS src, h.id, 'edit' AS kind, h.lang, h.file_id, h.key, h.id AS history_id, h.origin, h.user_id, h.created_at
 			FROM history h WHERE h.origin != 'import' AND `+where+`
 			UNION ALL
-			SELECT 1, a.id, iif(a.approved, 'approved', 'unapproved'), a.lang, a.key, a.history_id, '', a.user_id, a.created_at
+			SELECT 1, a.id, iif(a.approved, 'approved', 'unapproved'), a.lang, a.file_id, a.key, a.history_id, '', a.user_id, a.created_at
 			FROM approval_log a WHERE `+where+`
 			ORDER BY created_at DESC, src DESC, id DESC LIMIT ? OFFSET ?
 		)
-		SELECT p.kind, p.lang, p.key, coalesce(h.text, ''), p.origin, coalesce(p.user_id, 0), coalesce(u.name, ''), p.created_at,
-			coalesce(s.removed = 0 AND s.draft = 0, 0),
-			iif(p.kind = 'edit', (SELECT o.text FROM history o WHERE o.lang = p.lang AND o.key = p.key AND o.id < p.id ORDER BY o.id DESC LIMIT 1), NULL)
+		SELECT p.kind, p.lang, p.file_id, coalesce(f.name, ''), p.key, coalesce(h.text, ''), p.origin, coalesce(p.user_id, 0), coalesce(u.name, ''),
+			p.created_at, coalesce(s.removed = 0 AND s.draft = 0, 0),
+			iif(p.kind = 'edit', (SELECT o.text FROM history o
+				WHERE o.lang = p.lang AND o.file_id = p.file_id AND o.key = p.key AND o.id < p.id ORDER BY o.id DESC LIMIT 1), NULL)
 		FROM page p
+		LEFT JOIN files f ON f.id = p.file_id
 		LEFT JOIN history h ON h.id = p.history_id
 		LEFT JOIN users u ON u.id = p.user_id
-		LEFT JOIN source_strings s ON s.key = p.key
+		LEFT JOIN source_strings s ON s.file_id = p.file_id AND s.key = p.key
 		ORDER BY p.created_at DESC, p.src DESC, p.id DESC`, args...)
 	if err != nil {
 		return nil, err
@@ -1034,7 +1125,7 @@ func (s *Store) Activity(ctx context.Context, lang string, userID int64, offset,
 	for rows.Next() {
 		var a Activity
 		var prev sql.NullString
-		if err := rows.Scan(&a.Kind, &a.Lang, &a.Key, &a.Text, &a.Origin, &a.UserID, &a.UserName, &a.CreatedAt, &a.Open, &prev); err != nil {
+		if err := rows.Scan(&a.Kind, &a.Lang, &a.FileID, &a.File, &a.Key, &a.Text, &a.Origin, &a.UserID, &a.UserName, &a.CreatedAt, &a.Open, &prev); err != nil {
 			return nil, err
 		}
 		a.Prev, a.HasPrev = prev.String, prev.Valid
@@ -1043,55 +1134,68 @@ func (s *Store) Activity(ctx context.Context, lang string, userID int64, offset,
 	return out, rows.Err()
 }
 
-// ImportResult describes what ImportFiles did with each file.
+// ImportResult describes what ImportFiles did with each path.
 type ImportResult struct {
-	File   string
-	Lang   string
-	Source *SourceResult
-	Trans  *TranslationResult
-	Err    error
+	Path    string
+	File    File // the file imported into; ID 0 if there is none
+	NewFile bool // the source of a new file
+	Lang    string
+	Source  *SourceResult
+	Trans   *TranslationResult
+	Err     error
 }
 
-// ImportFiles imports ARB files named like "intl_de.arb". The file in the
-// source language is imported first, with decide as in ImportSource, and sets
-// the export file prefix; the others seed translations and add their languages.
-func (s *Store) ImportFiles(ctx context.Context, files map[string][]byte, decide map[string]string) ([]ImportResult, error) {
-	set, err := s.Settings(ctx)
+// ImportFiles imports ARB files by their paths relative to the repository
+// root, or by their file names alone (see Resolve). Source files are
+// imported first, with decide[file id] as in ImportSource; one that matches
+// no file creates it. The others seed translations of their files and add
+// their languages.
+func (s *Store) ImportFiles(ctx context.Context, files map[string][]byte, decide map[int64]map[string]string) ([]ImportResult, error) {
+	set, err := loadFileSet(ctx, s.r)
 	if err != nil {
 		return nil, err
 	}
-	names := make([]string, 0, len(files))
-	for n := range files {
-		names = append(names, n)
-	}
-	sort.Slice(names, func(i, j int) bool {
-		_, li, _ := arb.SplitFilename(names[i])
-		_, lj, _ := arb.SplitFilename(names[j])
-		if (li == set["source_lang"]) != (lj == set["source_lang"]) {
-			return li == set["source_lang"]
+	var sources, others []string
+	for _, p := range slices.Sorted(maps.Keys(files)) {
+		if t, err := set.resolve(p); err == nil && t.Source {
+			sources = append(sources, p)
+		} else {
+			others = append(others, p)
 		}
-		return names[i] < names[j]
-	})
+	}
 	var out []ImportResult
-	for _, name := range names {
-		r := ImportResult{File: name}
-		prefix, lang, ok := arb.SplitFilename(name)
+	for i, p := range append(sources, others...) {
+		if i == len(sources) && i > 0 {
+			// Translations can belong to files the sources just created.
+			if set, err = loadFileSet(ctx, s.r); err != nil {
+				return nil, err
+			}
+		}
+		r := ImportResult{Path: p}
+		t, err := set.resolve(p)
 		var f *arb.File
-		if !ok {
-			r.Err = fmt.Errorf("file name must look like intl_de.arb or app_pt_BR.arb")
-		} else if f, r.Err = arb.Parse(files[name]); r.Err == nil {
-			r.Lang = lang
-			if f.Locale != "" && f.Locale != lang {
-				r.Err = fmt.Errorf("@@locale %q does not match the file name", f.Locale)
-			} else if lang == set["source_lang"] {
+		if err == nil {
+			r.Path, r.File, r.NewFile, r.Lang = t.Path, t.File, t.New(), t.Lang
+			f, err = arb.Parse(files[p])
+		}
+		if err == nil && f.Locale != "" && f.Locale != t.Lang {
+			err = fmt.Errorf("@@locale %q does not match the path", f.Locale)
+		}
+		if r.Err = err; err == nil {
+			switch {
+			case t.Source && t.New():
 				var res SourceResult
-				if res, r.Err = s.ImportSource(ctx, f, decide); r.Err == nil {
+				if r.File, res, r.Err = s.ImportNewSource(ctx, t.File, f); r.Err == nil {
 					r.Source = &res
-					r.Err = s.SetSettings(ctx, map[string]string{"file_prefix": prefix})
 				}
-			} else {
+			case t.Source:
+				var res SourceResult
+				if res, r.Err = s.ImportSource(ctx, t.File.ID, f, decide[t.File.ID]); r.Err == nil {
+					r.Source = &res
+				}
+			default:
 				var res TranslationResult
-				res, r.Err = s.ImportTranslations(ctx, lang, f)
+				res, r.Err = s.ImportTranslations(ctx, t.File.ID, t.Lang, f)
 				r.Trans = &res
 			}
 		}
@@ -1100,27 +1204,40 @@ func (s *Store) ImportFiles(ctx context.Context, files map[string][]byte, decide
 	return out, nil
 }
 
+// FileDiff is what importing a source file would change.
+type FileDiff struct {
+	Path string
+	File File // ID 0 for a new file, named after the path
+	Diff *SourceDiff
+}
+
+func (d FileDiff) New() bool { return d.File.ID == 0 }
+
 // PreviewFiles returns what importing files would change in the source
-// strings, and the name of the source file. The diff is nil if files hold no
-// importable source file; ImportFiles reports why.
-func (s *Store) PreviewFiles(ctx context.Context, files map[string][]byte) (*SourceDiff, string, error) {
-	set, err := s.Settings(ctx)
+// strings, one diff per source file, in path order. Source files that can't
+// be imported are left out; ImportFiles reports why.
+func (s *Store) PreviewFiles(ctx context.Context, files map[string][]byte) ([]FileDiff, error) {
+	set, err := loadFileSet(ctx, s.r)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	for name, data := range files {
-		_, lang, ok := arb.SplitFilename(name)
-		if !ok || lang != set["source_lang"] {
+	var out []FileDiff
+	for _, p := range slices.Sorted(maps.Keys(files)) {
+		t, err := set.resolve(p)
+		if err != nil || !t.Source {
 			continue
 		}
-		f, err := arb.Parse(data)
-		if err != nil || (f.Locale != "" && f.Locale != lang) {
-			return nil, "", nil
+		f, err := arb.Parse(files[p])
+		if err != nil || (f.Locale != "" && f.Locale != t.Lang) {
+			continue
 		}
-		d, err := s.PreviewSource(ctx, f)
-		return d, name, err
+		d, err := s.PreviewSource(ctx, t.File.ID, f)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, FileDiff{Path: t.Path, File: t.File, Diff: d})
 	}
-	return nil, "", nil
+	return out, nil
 }
 
 // SaveUpload keeps files until they are imported or dropped, and returns an

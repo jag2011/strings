@@ -116,7 +116,7 @@
         const res = await fetch(url, { signal: pending.signal });
         if (!res.ok) return;
         const doc = new DOMParser().parseFromString(await res.text(), "text/html");
-        for (const sel of ["[data-results]", ".tabs"]) {
+        for (const sel of ["[data-results]", "[data-tabs=filter]", "[data-tabs=files]"]) {
           const next = doc.querySelector(sel);
           if (next) {
             localizeTimes(next);

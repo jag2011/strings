@@ -2,16 +2,18 @@
 {{$d := .Data}}{{$e := $d.Entry}}{{$canApprove := .User.CanApprove}}
 <div class="editor-layout">
 <nav class="keys" aria-label="Strings in this list" data-keys>
-  <p class="keys-head"><a href="{{base}}{{$d.ListURL}}">{{$d.Filter}}{{with $d.Q}} · “{{.}}”{{end}}</a> <span class="badge">{{$d.KeysMatching}}</span></p>
+  <p class="keys-head"><a href="{{base}}{{$d.ListURL}}">{{$d.Filter}}{{with $d.ListFile}} · {{.}}{{end}}{{with $d.Q}} · “{{.}}”{{end}}</a> <span class="badge">{{$d.KeysMatching}}</span></p>
   <ol>
   {{range $d.Keys}}
-    <li><a class="{{.State}}{{if not .Matches}} other{{end}}" href="{{base}}/t/{{$d.Lang}}/{{esc .Key}}{{query "filter" $d.Filter "q" $d.Q}}" title="{{.Key}}"{{if eq .Key $e.Key}} aria-current="page"{{end}}><span>{{.Key}}</span>{{if .Approved}}<span class="approved" aria-label="approved">✓</span>{{end}}</a></li>
+    {{with .Heading}}<li class="keys-file">{{.}}</li>{{end}}
+    <li><a class="{{.State}}{{if not .Matches}} other{{end}}" href="{{strURL $d.Lang .File .Key}}{{query "filter" $d.Filter "q" $d.Q "file" $d.ListFile}}" title="{{.Key}}"{{if and (eq .Key $e.Key) (eq .FileID $e.FileID)}} aria-current="page"{{end}}><span>{{.Key}}</span>{{if .Approved}}<span class="approved" aria-label="approved">✓</span>{{end}}</a></li>
   {{end}}
   </ol>
 </nav>
 <div>
 <p class="crumbs"><a href="{{base}}/">Languages</a> / <a href="{{base}}{{$d.ListURL}}">{{langName $d.Lang}}</a> /</p>
 <h1 class="key-title">{{$e.Key}}</h1>
+{{if .Multi}}<p class="file-path"><span class="file-label">{{$d.File.Name}}</span> <code>{{$d.FilePath}}</code></p>{{end}}
 
 <section class="source card">
   <h2 class="label">{{langName .Settings.source_lang}}</h2>
@@ -33,8 +35,8 @@
   </h2>
   {{if $e.Has}}<p class="text card" lang="{{bcp47 $d.Lang}}" dir="{{dir $d.Lang}}">{{$e.Text}}</p>{{else}}<p><span class="tag missing">missing</span></p>{{end}}
   <div class="actions">
-    {{with $d.NextKey}}<a class="button" href="{{base}}/t/{{$d.Lang}}/{{esc .}}{{query "filter" $d.Filter "q" $d.Q}}">Next →</a>{{end}}
-    <a href="{{base}}/login?next={{print "/t/" $d.Lang "/" (esc $e.Key)}}">Log in to translate</a>
+    {{if $d.Next.Key}}<a class="button" href="{{strURL $d.Lang $d.Next.File $d.Next.Key}}{{query "filter" $d.Filter "q" $d.Q "file" $d.ListFile}}">Next →</a>{{end}}
+    <a href="{{base}}/login?next={{print "/t/" $d.Lang "/" (esc $d.File.Name) "/" (esc $e.Key)}}">Log in to translate</a>
   </div>
 </section>
 {{else}}
@@ -42,6 +44,7 @@
   <input type="hidden" name="base" value="{{$d.Base}}">
   <input type="hidden" name="filter" value="{{$d.Filter}}">
   <input type="hidden" name="q" value="{{$d.Q}}">
+  <input type="hidden" name="file" value="{{$d.ListFile}}">
 
   {{if $d.Conflict}}
   <div class="error" role="alert">
@@ -75,7 +78,7 @@
     {{end}}
     <button type="button" data-copy-source hidden>Copy source</button>
     {{end}}
-    {{with $d.NextKey}}<a class="button" href="{{base}}/t/{{$d.Lang}}/{{esc .}}{{query "filter" $d.Filter "q" $d.Q}}">Next →</a>{{end}}
+    {{if $d.Next.Key}}<a class="button" href="{{strURL $d.Lang $d.Next.File $d.Next.Key}}{{query "filter" $d.Filter "q" $d.Q "file" $d.ListFile}}">Next →</a>{{end}}
     {{if $canApprove}}
     <input type="hidden" name="was_approved" value="{{if $e.Approved}}1{{end}}">
     <label class="check approve"><input type="checkbox" name="approved" value="1" {{if $d.Approved}}checked{{end}} data-approve> Approved</label>
@@ -100,11 +103,13 @@
         <input type="hidden" name="base" value="{{$e.HistoryID}}">
         <input type="hidden" name="filter" value="{{$d.Filter}}">
         <input type="hidden" name="q" value="{{$d.Q}}">
+        <input type="hidden" name="file" value="{{$d.ListFile}}">
+        {{$url := strURL $d.Lang $d.File.Name $e.Key}}
         {{if not .Same}}
-        <button class="small" formaction="{{base}}/t/{{$d.Lang}}/{{esc $e.Key}}/suggestions/{{.ID}}/use">Use</button>
-        {{if $canApprove}}<button class="small" formaction="{{base}}/t/{{$d.Lang}}/{{esc $e.Key}}/suggestions/{{.ID}}/use" name="approve" value="1">Use &amp; approve</button>{{end}}
+        <button class="small" formaction="{{$url}}/suggestions/{{.ID}}/use">Use</button>
+        {{if $canApprove}}<button class="small" formaction="{{$url}}/suggestions/{{.ID}}/use" name="approve" value="1">Use &amp; approve</button>{{end}}
         {{end}}
-        {{if $canApprove}}<button class="small" formaction="{{base}}/t/{{$d.Lang}}/{{esc $e.Key}}/suggestions/{{.ID}}/dismiss">Delete</button>{{end}}
+        {{if $canApprove}}<button class="small" formaction="{{$url}}/suggestions/{{.ID}}/dismiss">Delete</button>{{end}}
       </form>
       {{end}}
     </li>
@@ -131,16 +136,18 @@
       {{if or $restore $delete}}
       <div class="actions">
         {{if $restore}}
-        <form method="post" action="{{base}}/t/{{$d.Lang}}/{{esc $e.Key}}/revert/{{.ID}}" class="inline-form">
+        <form method="post" action="{{strURL $d.Lang $d.File.Name $e.Key}}/revert/{{.ID}}" class="inline-form">
           <input type="hidden" name="filter" value="{{$d.Filter}}">
           <input type="hidden" name="q" value="{{$d.Q}}">
+          <input type="hidden" name="file" value="{{$d.ListFile}}">
           <button class="small">Restore</button>
         </form>
         {{end}}
         {{if $delete}}
-        <form method="post" action="{{base}}/t/{{$d.Lang}}/{{esc $e.Key}}/delete/{{.ID}}" class="inline-form">
+        <form method="post" action="{{strURL $d.Lang $d.File.Name $e.Key}}/delete/{{.ID}}" class="inline-form">
           <input type="hidden" name="filter" value="{{$d.Filter}}">
           <input type="hidden" name="q" value="{{$d.Q}}">
+          <input type="hidden" name="file" value="{{$d.ListFile}}">
           <button class="small" data-confirm="{{if not .Current}}Delete this version?{{else if eq (len $e.History) 1}}Delete this translation? The string will be missing again.{{else}}Delete the current version? The one before it becomes current{{if $e.Approved}} and the approval is removed{{end}}.{{end}}">Delete</button>
         </form>
         {{end}}

@@ -31,6 +31,8 @@ const (
 
 type AIRun struct {
 	ID            int64
+	FileID        int64 // the file it translates
+	FileName      string
 	Lang          string
 	UserID        int64 // the AI user
 	UserName      string
@@ -67,14 +69,14 @@ func (r *AIRun) CanRestart() bool {
 }
 
 const aiRunSelect = `
-	SELECT r.id, r.lang, r.user_id, u.name, coalesce(r.started_by, 0), coalesce(b.name, ''), r.model, r.input, r.suggest, r.notes,
+	SELECT r.id, r.file_id, coalesce(f.name, ''), r.lang, r.user_id, u.name, coalesce(r.started_by, 0), coalesce(b.name, ''), r.model, r.input, r.suggest, r.notes,
 		r.max_cost, r.status, r.translated, r.suggested, r.failed, r.steps, r.input_tokens, r.cached_tokens, r.output_tokens,
 		r.cost, r.summary, r.error, r.prompt, r.created_at, coalesce(r.started_at, ''), coalesce(r.finished_at, '')
-	FROM ai_runs r JOIN users u ON u.id = r.user_id LEFT JOIN users b ON b.id = r.started_by`
+	FROM ai_runs r JOIN users u ON u.id = r.user_id LEFT JOIN users b ON b.id = r.started_by LEFT JOIN files f ON f.id = r.file_id`
 
 func scanAIRun(row interface{ Scan(...any) error }) (*AIRun, error) {
 	r := &AIRun{}
-	err := row.Scan(&r.ID, &r.Lang, &r.UserID, &r.UserName, &r.StartedBy, &r.StartedByName, &r.Model, &r.Input, &r.Suggest, &r.Notes,
+	err := row.Scan(&r.ID, &r.FileID, &r.FileName, &r.Lang, &r.UserID, &r.UserName, &r.StartedBy, &r.StartedByName, &r.Model, &r.Input, &r.Suggest, &r.Notes,
 		&r.MaxCost, &r.Status, &r.Translated, &r.Suggested, &r.Failed, &r.Steps, &r.InputTokens, &r.CachedTokens, &r.OutputTokens,
 		&r.Cost, &r.Summary, &r.Error, &r.Prompt, &r.CreatedAt, &r.StartedAt, &r.FinishedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -83,8 +85,8 @@ func scanAIRun(row interface{ Scan(...any) error }) (*AIRun, error) {
 	return r, err
 }
 
-// CreateAIRun queues a run of an AI user's model. Only Lang, UserID,
-// StartedBy, Input, Suggest, Notes and MaxCost are used.
+// CreateAIRun queues a run of an AI user's model. Only FileID, Lang,
+// UserID, StartedBy, Input, Suggest, Notes and MaxCost are used.
 func (s *Store) CreateAIRun(ctx context.Context, r AIRun) (*AIRun, error) {
 	if r.Input != AIInputMissing && r.Input != AIInputAll {
 		return nil, fmt.Errorf("unknown input %q", r.Input)
@@ -94,10 +96,11 @@ func (s *Store) CreateAIRun(ctx context.Context, r AIRun) (*AIRun, error) {
 	}
 	var id int64
 	err := s.w.QueryRowContext(ctx, `
-		INSERT INTO ai_runs (lang, user_id, started_by, model, input, suggest, notes, max_cost)
-		SELECT ?, id, ?, ai_model, ?, ?, ?, ? FROM users WHERE id = ? AND ai_model IS NOT NULL AND disabled = 0
+		INSERT INTO ai_runs (file_id, lang, user_id, started_by, model, input, suggest, notes, max_cost)
+		SELECT f.id, ?, u.id, ?, u.ai_model, ?, ?, ?, ? FROM users u, files f
+		WHERE u.id = ? AND u.ai_model IS NOT NULL AND u.disabled = 0 AND f.id = ?
 		RETURNING id`,
-		r.Lang, sql.NullInt64{Int64: r.StartedBy, Valid: r.StartedBy != 0}, r.Input, r.Suggest, strings.TrimSpace(r.Notes), r.MaxCost, r.UserID).Scan(&id)
+		r.Lang, sql.NullInt64{Int64: r.StartedBy, Valid: r.StartedBy != 0}, r.Input, r.Suggest, strings.TrimSpace(r.Notes), r.MaxCost, r.UserID, r.FileID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	} else if err != nil {
@@ -257,22 +260,22 @@ type AIString struct {
 	Outdated    bool
 }
 
-// AIPending returns the strings an AI user still has to do for a language,
-// in source order: those without a translation, and with input "all" also
-// unapproved translations by others. Strings the AI user already translated
-// or suggested something for, for the current source text, are done.
-// Approved strings are never pending.
-func (s *Store) AIPending(ctx context.Context, lang string, aiUserID int64, input string) ([]AIString, error) {
+// AIPending returns the strings of a file an AI user still has to do for a
+// language, in source order: those without a translation, and with input
+// "all" also unapproved translations by others. Strings the AI user already
+// translated or suggested something for, for the current source text, are
+// done. Approved strings are never pending.
+func (s *Store) AIPending(ctx context.Context, file int64, lang string, aiUserID int64, input string) ([]AIString, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT s.key, s.text, s.meta, coalesce(t.text, ''), t.key IS NOT NULL, coalesce(t.source_hash != s.hash, 0)
 		FROM source_strings s
-		LEFT JOIN translations t ON t.lang = ?1 AND t.key = s.key
-		WHERE s.removed = 0 AND s.draft = 0
+		LEFT JOIN translations t ON t.lang = ?1 AND t.file_id = s.file_id AND t.key = s.key
+		WHERE s.file_id = ?4 AND s.removed = 0 AND s.draft = 0
 			AND (t.key IS NULL OR (?3 = 'all' AND t.approved_by IS NULL
 				AND NOT (t.user_id IS ?2 AND t.source_hash = s.hash)))
 			AND NOT EXISTS (SELECT 1 FROM suggestions g
-				WHERE g.lang = ?1 AND g.key = s.key AND g.user_id = ?2 AND g.source_hash = s.hash)
-		ORDER BY s.position`, lang, aiUserID, input)
+				WHERE g.lang = ?1 AND g.file_id = s.file_id AND g.key = s.key AND g.user_id = ?2 AND g.source_hash = s.hash)
+		ORDER BY s.position`, lang, aiUserID, input, file)
 	if err != nil {
 		return nil, err
 	}
@@ -304,19 +307,19 @@ type AIFill struct {
 }
 
 // AIFillStats counts per language what aiUserID, and the AI users together,
-// have left to suggest among the missing strings, and what aiUserID's
-// suggestions could fill in.
-func (s *Store) AIFillStats(ctx context.Context, aiUserID int64) ([]AIFill, error) {
+// have left to suggest among the missing strings of a file, and what
+// aiUserID's suggestions could fill in.
+func (s *Store) AIFillStats(ctx context.Context, file, aiUserID int64) ([]AIFill, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT l.code, count(s.key),
 			coalesce(sum(NOT EXISTS (SELECT 1 FROM suggestions g
-				WHERE g.lang = l.code AND g.key = s.key AND g.source_hash = s.hash AND g.user_id = ?1)), 0),
+				WHERE g.lang = l.code AND g.file_id = s.file_id AND g.key = s.key AND g.source_hash = s.hash AND g.user_id = ?1)), 0),
 			coalesce(sum(NOT EXISTS (SELECT 1 FROM suggestions g JOIN users u ON u.id = g.user_id
-				WHERE g.lang = l.code AND g.key = s.key AND g.source_hash = s.hash AND u.ai_model IS NOT NULL)), 0)
+				WHERE g.lang = l.code AND g.file_id = s.file_id AND g.key = s.key AND g.source_hash = s.hash AND u.ai_model IS NOT NULL)), 0)
 		FROM languages l
-		LEFT JOIN source_strings s ON s.removed = 0 AND s.draft = 0
-			AND NOT EXISTS (SELECT 1 FROM translations t WHERE t.lang = l.code AND t.key = s.key)
-		GROUP BY l.code ORDER BY l.code`, aiUserID)
+		LEFT JOIN source_strings s ON s.file_id = ?2 AND s.removed = 0 AND s.draft = 0
+			AND NOT EXISTS (SELECT 1 FROM translations t WHERE t.lang = l.code AND t.file_id = s.file_id AND t.key = s.key)
+		GROUP BY l.code ORDER BY l.code`, aiUserID, file)
 	if err != nil {
 		return nil, err
 	}
@@ -335,10 +338,10 @@ func (s *Store) AIFillStats(ctx context.Context, aiUserID int64) ([]AIFill, erro
 
 	rows, err = s.r.QueryContext(ctx, `
 		SELECT g.lang, count(*) FROM suggestions g
-		JOIN source_strings s ON s.key = g.key AND s.removed = 0 AND s.draft = 0
-		LEFT JOIN translations t ON t.lang = g.lang AND t.key = g.key
-		WHERE g.user_id = ? AND `+promotableSuggestion+`
-		GROUP BY g.lang`, aiUserID)
+		JOIN source_strings s ON s.file_id = g.file_id AND s.key = g.key AND s.removed = 0 AND s.draft = 0
+		LEFT JOIN translations t ON t.lang = g.lang AND t.file_id = g.file_id AND t.key = g.key
+		WHERE g.file_id = ? AND g.user_id = ? AND `+promotableSuggestion+`
+		GROUP BY g.lang`, file, aiUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -360,21 +363,24 @@ func (s *Store) AIFillStats(ctx context.Context, aiUserID int64) ([]AIFill, erro
 
 // AIMatch is an existing translation found by AILookup.
 type AIMatch struct {
+	File              string // the file's name
 	Key, Source, Text string
 	Approved          bool
 	Human             bool // written or imported by a person
 	Outdated          bool
 }
 
-// AILookup searches a language's translations by key, source or translated
-// text, approved ones first, so an agent can keep terms consistent.
+// AILookup searches a language's translations in all files by key, source
+// or translated text, approved ones first, so an agent can keep terms
+// consistent.
 func (s *Store) AILookup(ctx context.Context, lang, q string, limit int) ([]AIMatch, error) {
 	search, args := searchSQL(strings.TrimSpace(q))
 	rows, err := s.r.QueryContext(ctx, `
-		SELECT s.key, s.text, t.text, t.approved_by IS NOT NULL, t.origin != 'machine', t.source_hash != s.hash
-		FROM source_strings s JOIN translations t ON t.key = s.key AND t.lang = ?
+		SELECT f.name, s.key, s.text, t.text, t.approved_by IS NOT NULL, t.origin != 'machine', t.source_hash != s.hash
+		FROM source_strings s JOIN files f ON f.id = s.file_id
+		JOIN translations t ON t.file_id = s.file_id AND t.key = s.key AND t.lang = ?
 		WHERE s.removed = 0 AND s.draft = 0`+search+`
-		ORDER BY t.approved_by IS NULL, t.source_hash != s.hash, s.position LIMIT ?`,
+		ORDER BY t.approved_by IS NULL, t.source_hash != s.hash, f.position, f.id, s.position LIMIT ?`,
 		append(append([]any{lang}, args...), limit)...)
 	if err != nil {
 		return nil, err
@@ -383,7 +389,7 @@ func (s *Store) AILookup(ctx context.Context, lang, q string, limit int) ([]AIMa
 	var out []AIMatch
 	for rows.Next() {
 		var m AIMatch
-		if err := rows.Scan(&m.Key, &m.Source, &m.Text, &m.Approved, &m.Human, &m.Outdated); err != nil {
+		if err := rows.Scan(&m.File, &m.Key, &m.Source, &m.Text, &m.Approved, &m.Human, &m.Outdated); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
@@ -410,6 +416,7 @@ type AISaved struct {
 
 // AISaveJob says for whom and how AISave saves.
 type AISaveJob struct {
+	File     int64
 	Lang     string
 	AIUserID int64
 	Input    string // AIInputMissing or AIInputAll
@@ -452,7 +459,8 @@ func aiSave(ctx context.Context, tx *sql.Tx, job AISaveJob, key, text string) (A
 		return r, nil
 	}
 	var src, hash string
-	err := tx.QueryRowContext(ctx, "SELECT text, hash FROM source_strings WHERE key = ? AND removed = 0 AND draft = 0", key).Scan(&src, &hash)
+	err := tx.QueryRowContext(ctx, "SELECT text, hash FROM source_strings WHERE file_id = ? AND key = ? AND removed = 0 AND draft = 0",
+		job.File, key).Scan(&src, &hash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fail("Unknown key.")
 	} else if err != nil {
@@ -466,8 +474,8 @@ func aiSave(ctx context.Context, tx *sql.Tx, job AISaveJob, key, text string) (A
 
 	var curText, curHash string
 	var approved bool
-	err = tx.QueryRowContext(ctx, "SELECT text, source_hash, approved_by IS NOT NULL FROM translations WHERE lang = ? AND key = ?",
-		job.Lang, key).Scan(&curText, &curHash, &approved)
+	err = tx.QueryRowContext(ctx, "SELECT text, source_hash, approved_by IS NOT NULL FROM translations WHERE lang = ? AND file_id = ? AND key = ?",
+		job.Lang, job.File, key).Scan(&curText, &curHash, &approved)
 	found := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return r, err
@@ -478,7 +486,7 @@ func aiSave(ctx context.Context, tx *sql.Tx, job AISaveJob, key, text string) (A
 	case found && job.Input != AIInputAll:
 		return fail("This string is already translated and not part of this job.")
 	case !found && !job.Suggest:
-		if _, err := save(ctx, tx, job.Lang, key, text, "machine", job.AIUserID, job.AIUserID, 0, KeepApproval); err != nil {
+		if _, err := save(ctx, tx, job.File, job.Lang, key, text, "machine", job.AIUserID, job.AIUserID, 0, KeepApproval); err != nil {
 			return r, err
 		}
 		r.Result = AITranslated
@@ -486,7 +494,7 @@ func aiSave(ctx context.Context, tx *sql.Tx, job AISaveJob, key, text string) (A
 	}
 	// A suggestion equal to the current translation is stored too, so the
 	// string counts as done for this AI user. The editor shows it greyed out.
-	if err := suggest(ctx, tx, job.Lang, key, text, job.AIUserID); err != nil {
+	if err := suggest(ctx, tx, job.File, job.Lang, key, text, job.AIUserID); err != nil {
 		return r, err
 	}
 	r.Result = AISuggested

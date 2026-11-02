@@ -9,17 +9,17 @@
   <ul class="plain">
   {{range .}}{{$r := .}}
     <li>
-      <strong>{{.File}}</strong>
+      <strong>{{.Path}}</strong>
       {{if .Err}}<span class="error-text">{{.Err}}</span>
-      {{else if .Source}}source · revision {{.Source.Revision}} · {{.Source.Added}} added, {{.Source.Changed}} changed, {{.Source.Removed}} removed, {{.Source.Unchanged}} unchanged
+      {{else if .Source}}{{if .NewFile}}source of the new file <strong>{{.File.Name}}</strong>{{else}}source{{if $.Multi}} of {{.File.Name}}{{end}}{{end}} · revision {{.Source.Revision}} · {{.Source.Added}} added, {{.Source.Changed}} changed, {{.Source.Removed}} removed, {{.Source.Unchanged}} unchanged
         {{with .Source.Changed}}<br><span class="muted small">Translations of changed strings: {{$r.Source.Kept}} kept, {{$r.Source.Outdated}} marked outdated, {{$r.Source.Cleared}} removed</span>{{end}}
-      {{else if .Trans}}{{langName .Lang}} · {{.Trans.Added}} added, {{.Trans.Updated}} updated, {{.Trans.Unchanged}} unchanged
+      {{else if .Trans}}{{langName .Lang}}{{if $.Multi}} · {{.File.Name}}{{end}} · {{.Trans.Added}} added, {{.Trans.Updated}} updated, {{.Trans.Unchanged}} unchanged
         {{with .Trans.Skipped}}<br><span class="muted small">{{len .}} kept because they were edited here</span>{{end}}
-        {{with .Trans.Stale}}<br><span class="muted small">{{len .}} changed or removed here since, ignored: {{range $i, $k := .}}{{if $i}}, {{end}}<a href="{{base}}/t/{{$r.Lang}}/{{esc $k}}">{{$k}}</a>{{end}}</span>{{end}}
+        {{with .Trans.Stale}}<br><span class="muted small">{{len .}} changed or removed here since, ignored: {{range $i, $k := .}}{{if $i}}, {{end}}<a href="{{strURL $r.Lang $r.File.Name $k}}">{{$k}}</a>{{end}}</span>{{end}}
         {{with .Trans.Unknown}}<br><span class="muted small">{{len .}} keys not in the source, ignored</span>{{end}}
         {{with .Trans.Invalid}}<br><span class="error-text small">{{len .}} failed validation, not imported: {{range $i, $k := .}}{{if $i}}, {{end}}{{$k}}{{end}}</span>{{end}}
         {{with .Trans.Untranslated}}<br><span class="muted small">{{len .}} same as the source text, left missing</span>{{end}}
-        {{with .Trans.Empty}}<br><span class="muted small">{{len .}} empty, left missing: {{range $i, $k := .}}{{if $i}}, {{end}}<a href="{{base}}/t/{{$r.Lang}}/{{esc $k}}">{{$k}}</a>{{end}}</span>{{end}}
+        {{with .Trans.Empty}}<br><span class="muted small">{{len .}} empty, left missing: {{range $i, $k := .}}{{if $i}}, {{end}}<a href="{{strURL $r.Lang $r.File.Name $k}}">{{$k}}</a>{{end}}</span>{{end}}
         {{with .Trans.Warned}}<br><span class="muted small">{{len .}} imported with warnings: {{range $i, $k := .}}{{if $i}}, {{end}}{{$k}}{{end}}</span>{{end}}
       {{end}}
     </li>
@@ -42,10 +42,35 @@
     <label>Name <input name="name" value="{{$s.name}}" required></label>
     <label>Accent color <input type="color" name="accent" value="{{$s.accent}}"></label>
     <label>Source language <input name="source_lang" value="{{$s.source_lang}}" required pattern="[a-z]{2,3}(_[A-Za-z0-9]+)*"></label>
-    <label>File prefix <input name="file_prefix" value="{{$s.file_prefix}}" placeholder="intl_"></label>
-    <p class="muted small span">Files are named <code>{{$s.file_prefix}}de.arb</code>. Flutter's gen-l10n uses <code>app_</code>, intl_utils uses <code>intl_</code>.</p>
     <div class="span"><button class="primary">Save</button></div>
   </form>
+</section>
+
+<section class="card" id="files">
+  <h2>Files</h2>
+  {{if not $d.Files}}
+  <p class="muted">No files yet. Importing a source file creates one.</p>
+  {{else}}
+  <p class="muted small">Each file has its own strings. The path is relative to the repository root, with <code>{locale}</code> for the language code. Imports find a file by it, and exports write it there.</p>
+  <table class="files">
+    <thead><tr><th>Name</th><th>Path</th><th>Strings</th><th></th></tr></thead>
+    <tbody>
+    {{range $i, $f := $d.Files}}
+    <tr>
+      <td><input name="name" value="{{.Name}}" form="file-{{.ID}}" aria-label="Name of {{.Name}}" required pattern="[a-z0-9_\-]{1,40}" size="10"></td>
+      <td><input class="mono" name="path" value="{{.Template}}" form="file-{{.ID}}" aria-label="Path of {{.Name}}" required></td>
+      <td class="nowrap muted small">{{.Strings}} · rev. {{.Revision}}</td>
+      <td class="nowrap">
+        <form method="post" action="{{base}}/admin/files/{{.ID}}" id="file-{{.ID}}" class="inline-form"><button class="small">Save</button></form>
+        {{if $i}}<form method="post" action="{{base}}/admin/files/{{.ID}}/up" class="inline-form"><button class="small" title="Move up" aria-label="Move {{.Name}} up">↑</button></form>{{end}}
+        {{if lt (add $i 1) (len $d.Files)}}<form method="post" action="{{base}}/admin/files/{{.ID}}/down" class="inline-form"><button class="small" title="Move down" aria-label="Move {{.Name}} down">↓</button></form>{{end}}
+        {{if not .Used}}<form method="post" action="{{base}}/admin/files/{{.ID}}/delete" class="inline-form"><button class="small danger" data-confirm="Delete the file {{.Name}} and its {{.Strings}} source strings? Nothing has been translated in it yet.">Delete</button></form>{{end}}
+      </td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{end}}
 </section>
 
 <section class="card" id="languages">
@@ -67,23 +92,27 @@
 
 <section class="card" id="import">
   <h2>Import</h2>
-  <p>Select ARB files named like <code>{{$s.file_prefix}}{{$s.source_lang}}.arb</code> and <code>{{$s.file_prefix}}de.arb</code>.
-     The {{langName $s.source_lang}} file becomes the source. The others seed translations and add their language;
-     strings edited here are never overwritten. A new source file is shown for review before it is imported.
-     The source is at revision {{$s.source_revision}}.</p>
+  <p>Select ARB files like <code>intl_{{$s.source_lang}}.arb</code> and <code>intl_de.arb</code>, or a zip of them with their folders from the repository root.
+     A {{langName $s.source_lang}} file updates the source strings of its file{{if $d.Files}}, or creates a new file if none fits{{end}}.
+     The others seed translations and add their language; strings edited here are never overwritten.
+     Source changes are shown for review before they are imported.</p>
+  {{if .Multi}}<p class="muted small">Single files are matched by their name. Two files with the same name in different folders need a zip.</p>{{end}}
   <form method="post" action="{{base}}/admin/import" enctype="multipart/form-data" class="inline">
-    <input type="file" name="files" accept=".arb" multiple required>
+    <input type="file" name="files" accept=".arb,.zip" multiple required>
     <button>Import</button>
   </form>
 </section>
 
 <section class="card" id="export">
   <h2>Export</h2>
-  <p><a class="button" href="{{base}}/export.zip">Download all as zip</a></p>
+  <p><a class="button" href="{{base}}/export.zip">Download all as zip</a>{{if $d.Files}} <span class="muted small">with folders, to unzip at the repository root</span>{{end}}</p>
+  {{range $d.Files}}{{$f := .}}
+  {{if $.Multi}}<h3 class="small">{{.Name}}</h3>{{end}}
   <ul class="plain columns">
-    <li><a href="{{base}}/export/{{$s.file_prefix}}{{$s.source_lang}}.arb">{{$s.file_prefix}}{{$s.source_lang}}.arb</a> <span class="muted small">source</span></li>
-    {{range $d.Languages}}<li><a href="{{base}}/export/{{$s.file_prefix}}{{.}}.arb">{{$s.file_prefix}}{{.}}.arb</a></li>{{end}}
+    <li><a href="{{base}}/export/{{$f.Path $s.source_lang}}" title="{{$f.Path $s.source_lang}}">{{fileName ($f.Path $s.source_lang)}}</a> <span class="muted small">source</span></li>
+    {{range $d.Languages}}<li><a href="{{base}}/export/{{$f.Path .}}" title="{{$f.Path .}}">{{fileName ($f.Path .)}}</a></li>{{end}}
   </ul>
+  {{end}}
 </section>
 
 <section class="card" id="api">
@@ -102,7 +131,7 @@
     <input name="name" placeholder="e.g. CI sync" required aria-label="Token name">
     <button>Create token</button>
   </form>
-<pre class="small">curl -X PUT -H "Authorization: Bearer $TOKEN" --data-binary @lib/l10n/{{$s.file_prefix}}{{$s.source_lang}}.arb {{"{"}}host{{"}"}}/api/v1/source
-curl -H "Authorization: Bearer $TOKEN" -o lib/l10n/{{$s.file_prefix}}de.arb {{"{"}}host{{"}"}}/api/v1/arb/{{$s.file_prefix}}de.arb</pre>
+<pre class="small">curl -X PUT -H "Authorization: Bearer $TOKEN" --data-binary @{{$d.SourcePath}} {{"{"}}host{{"}"}}/api/v1/files/{{$d.SourcePath}}
+curl -fsS -H "Authorization: Bearer $TOKEN" -o strings.zip {{"{"}}host{{"}"}}/api/v1/files.zip && unzip -o strings.zip && rm strings.zip</pre>
 </section>
 {{end}}

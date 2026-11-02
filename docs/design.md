@@ -15,7 +15,8 @@ app's repository and is never written by strings.
 ## Principles
 
 - **One instance, one SQLite file, one project.** There is no project layer.
-  Several apps means several instances.
+  Several apps means several instances. A project can have several source
+  files, like the app strings and the store listing of the same app.
 - **Plain server-rendered pages.** Every feature works without JavaScript.
 - **Few dependencies.** The Go standard library plus a pure-Go SQLite driver,
   and OpenRouter's agent SDK for AI translation.
@@ -28,7 +29,7 @@ app's repository and is never written by strings.
 | Part | Choice | Why |
 |---|---|---|
 | Language | Go 1.26 | Single static binary, stdlib covers almost everything |
-| Routing | `net/http` `ServeMux` | Method and path patterns (`GET /t/{lang}/{key}`) are built in |
+| Routing | `net/http` `ServeMux` | Method and path patterns (`GET /t/{lang}/{file}/{key}`) are built in |
 | CSRF | `http.CrossOriginProtection` | Rejects cross-origin POSTs via `Sec-Fetch-Site`/`Origin`, no tokens in forms |
 | Templates | `html/template` | Auto-escaping, no build step |
 | Assets | `embed.FS` | Templates, CSS and JS ship inside the binary |
@@ -75,18 +76,20 @@ Import:
   placeholder text. Drafts are hidden from translators: not listed, not
   counted, not editable. The tag is re-read on every source import, so
   dropping it makes the string translatable.
-- A source import updates texts and hashes and marks keys that disappeared as
-  removed. They stay in the history but are no longer exported.
-- Every source import that changes texts, metadata or order raises the source
-  revision by one.
-- A source file uploaded in the web UI is kept in `uploads` and shown for
-  review first: revision, added, removed and unchanged counts, and every
-  changed string with its old and new text. Per changed string the admin
-  chooses what happens to its translations: *keep* (still up to date, e.g. a
-  typo fix; the default), *mark outdated* (the default for former drafts) or
-  *remove* (missing again, history keeps them). Confirming checks that the
-  revision is still the one reviewed. The API and the `import` command don't
-  ask and mark translations of changed strings outdated.
+- A source import updates the texts and hashes of its file and marks keys
+  that disappeared from it as removed. They stay in the history but are no
+  longer exported. Other files aren't touched.
+- Every source import that changes texts, metadata or order raises the
+  file's revision by one.
+- Source files uploaded in the web UI are kept in `uploads` and shown for
+  review first, one section per file: "new file", or the revision, added,
+  removed and unchanged counts, and every changed string with its old and
+  new text. Per changed string the admin chooses what happens to its
+  translations: *keep* (still up to date, e.g. a typo fix; the default),
+  *mark outdated* (the default for former drafts) or *remove* (missing again,
+  history keeps them). Confirming checks that every file is still at the
+  revision reviewed. The API and the `import` command don't ask and mark
+  translations of changed strings outdated.
 - Translation imports never overwrite strings edited in strings.
 - Empty translations of non-empty source text are treated as missing, so the
   app falls back to the source language instead of showing nothing.
@@ -119,9 +122,37 @@ ICU MessageFormat as Flutter uses it: apostrophes are literal text.
 Errors block saving. Warnings need a second click. Imports skip strings with
 errors and report those with warnings.
 
+### Files
+
+A file is a path template relative to the repository root with one
+`{locale}`: `lib/l10n/intl_{locale}.arb`, `fastlane/listing/store_{locale}.arb`.
+Its id is used everywhere else, so the path and name can change without
+touching data. Whether exports get `@@locale` and a trailing newline, and the
+source revision, are kept per file.
+
+- **Matching a path.** A path is matched against every template, where
+  `{locale}` must be a valid locale; the result is the file and language.
+  Templates may not overlap: a template is refused if one of its paths, for
+  the instance's languages and a few sample locales, fits another one.
+- **File names alone.** Browsers don't send folders with uploaded files, so
+  a path without a folder that fits no template also matches a template's
+  file name, as long as only one does. Otherwise the upload needs a zip,
+  which keeps its paths.
+- **New files.** A source-language path that fits no template creates a
+  file: the path with the locale replaced, named after the file name prefix
+  (`store_` → `store`, none → `app`). If the name is taken, the import is
+  refused instead, since that's usually a file whose path wasn't updated
+  under *Settings → Files*. A translation path that fits no file is an error.
+
 ## Data model
 
-Schema: [`internal/store/schema/001_init.sql`](../internal/store/schema/001_init.sql).
+Schema: [`internal/store/schema/001_init.sql`](../internal/store/schema/001_init.sql),
+files since [`011_files.sql`](../internal/store/schema/011_files.sql).
+
+- **Strings are per file.** `source_strings` is keyed by `(file_id, key)`,
+  `translations` by `(lang, file_id, key)`, and `history`, `suggestions`,
+  `approval_log` and `ai_runs` carry the file. Every join between them
+  matches the file as well as the key.
 
 - **Approved** means `translations.approved_by` is set. Approved translations
   can't be saved, restored or overwritten by imports until a proofreader or
@@ -173,8 +204,8 @@ Schema: [`internal/store/schema/001_init.sql`](../internal/store/schema/001_init
 
 ## AI translation (`internal/ai`)
 
-An admin queues a run on `/admin/ai`: language, AI user, *Missing* or *All*,
-suggestions only or not, cost limit. One worker goroutine in
+An admin queues a run on `/admin/ai`: file, language, AI user, *Missing* or
+*All*, suggestions only or not, cost limit. A run translates one file. One worker goroutine in
 `stringsd serve` runs one run at a time, oldest first.
 
 ```
@@ -184,12 +215,12 @@ Runner ──session──▶ go-agent loop ──▶ OpenRouter ──▶ the A
    └─ ai_runs ◀── get_job · next_strings · lookup · save ──▶ store
 ```
 
-- **Tools** are plain Go functions. `get_job` returns the language, mode
-  and strings left. `next_strings(limit)` returns the next
+- **Tools** are plain Go functions. `get_job` returns the file, language,
+  mode and strings left. `next_strings(limit)` returns the next
   pending strings as ARB (source, `@key` metadata) plus current translations;
   each string is handed out once per run, so one the model can't get right
-  doesn't loop. `lookup(query)` searches existing translations, approved ones
-  first, to keep terms consistent. `save([{key, text}])` runs `arb.Check`
+  doesn't loop. `lookup(query)` searches existing translations in all files, approved
+  ones first, to keep terms consistent between the app and its store text. `save([{key, text}])` runs `arb.Check`
   and saves by the rules below, returning errors and warnings per key.
 - **The rules live in `store.AISave`, not in the prompt:** no translation →
   the AI user's translation (origin `machine`), or a suggestion if the run
@@ -209,7 +240,7 @@ Runner ──session──▶ go-agent loop ──▶ OpenRouter ──▶ the A
 - **The prompt** is editable on `/admin/ai/prompt` and stored in the
   `ai_prompt` setting; empty means the built-in `ai.DefaultPrompt`, so
   saving it unchanged or resetting picks up later improvements. Variables
-  in double braces (`{{language}}`, `{{source}}`, `{{code}}`, `{{job}}`)
+  in double braces (`{{file}}`, `{{language}}`, `{{source}}`, `{{code}}`, `{{job}}`)
   are filled in per run, unknown ones are refused on saving. A run reads
   the prompt when it starts and keeps the filled-in text in
   `ai_runs.prompt`, so results can be compared after editing it.

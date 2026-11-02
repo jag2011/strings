@@ -14,7 +14,18 @@ import (
 	"github.com/jag2011/strings/internal/arb"
 )
 
+// open returns a new database with one file, intl_{locale}.arb with id 1.
 func open(t *testing.T) *Store {
+	t.Helper()
+	s := openEmpty(t)
+	if _, err := s.w.Exec("INSERT INTO files (id, path, name, position) VALUES (1, 'intl_{locale}.arb', 'intl', 1)"); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// openEmpty returns a new database without files.
+func openEmpty(t *testing.T) *Store {
 	t.Helper()
 	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -35,7 +46,12 @@ func parse(t *testing.T, src string) *arb.File {
 
 func entry(t *testing.T, s *Store, lang, key string) *Entry {
 	t.Helper()
-	e, err := s.Entry(context.Background(), lang, key)
+	return entryIn(t, s, 1, lang, key)
+}
+
+func entryIn(t *testing.T, s *Store, file int64, lang, key string) *Entry {
+	t.Helper()
+	e, err := s.Entry(context.Background(), file, lang, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,10 +68,10 @@ func TestForeignKeysAfterMigrate(t *testing.T) {
 
 func TestSourceAndOutdated(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	if _, err := s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana {n}", "c": "Cherry"}`), nil); err != nil {
+	if _, err := s.ImportSource(ctx, 1, parse(t, `{"a": "Apple", "b": "Banana {n}", "c": "Cherry"}`), nil); err != nil {
 		t.Fatal(err)
 	}
-	res, err := s.ImportTranslations(ctx, "de", parse(t, `{"a": "Apfel", "b": "Banane", "x": "?"}`))
+	res, err := s.ImportTranslations(ctx, 1, "de", parse(t, `{"a": "Apfel", "b": "Banane", "x": "?"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +80,7 @@ func TestSourceAndOutdated(t *testing.T) {
 	}
 
 	// Change a, remove c.
-	src, err := s.ImportSource(ctx, parse(t, `{"b": "Banana {n}", "a": "Apples"}`), nil)
+	src, err := s.ImportSource(ctx, 1, parse(t, `{"b": "Banana {n}", "a": "Apples"}`), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,20 +90,20 @@ func TestSourceAndOutdated(t *testing.T) {
 	if !entry(t, s, "de", "a").Outdated {
 		t.Error("a should be outdated")
 	}
-	stats, _ := s.Stats(ctx)
+	stats, _ := s.Stats(ctx, 0)
 	if len(stats) != 1 || stats[0].Total != 2 || stats[0].Done != 1 || stats[0].Outdated != 1 || stats[0].Missing != 0 {
 		t.Errorf("stats: %+v", stats)
 	}
 
 	// Export follows the new source order and leaves out removed keys.
-	f, _ := s.Export(ctx, "de")
+	f, _ := s.Export(ctx, 1, "de")
 	if got := string(arb.Write(f)); got != "{\n  \"b\": \"Banane\",\n  \"a\": \"Apfel\"\n}" {
 		t.Errorf("export: %q", got)
 	}
 
 	// Saving the unchanged text marks it up to date.
 	e := entry(t, s, "de", "a")
-	saved, err := s.Save(ctx, "de", "a", "Apfel", 0, e.HistoryID, KeepApproval)
+	saved, err := s.Save(ctx, 1, "de", "a", "Apfel", 0, e.HistoryID, KeepApproval)
 	if err != nil || !saved {
 		t.Fatal(saved, err)
 	}
@@ -95,30 +111,30 @@ func TestSourceAndOutdated(t *testing.T) {
 		t.Error("a should be up to date")
 	}
 	// Saving the same text again does nothing.
-	if saved, _ := s.Save(ctx, "de", "a", "Apfel", 0, -1, KeepApproval); saved {
+	if saved, _ := s.Save(ctx, 1, "de", "a", "Apfel", 0, -1, KeepApproval); saved {
 		t.Error("expected no-op")
 	}
 }
 
 func TestSaveConflictAndRevert(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	s.ImportSource(ctx, parse(t, `{"a": "Apple"}`), nil)
+	s.ImportSource(ctx, 1, parse(t, `{"a": "Apple"}`), nil)
 	s.AddLanguage(ctx, "de")
 	u1, _ := s.CreateUser(ctx, "one@example.com", "One", "translator")
 	u2, _ := s.CreateUser(ctx, "two@example.com", "Two", "translator")
 
-	if _, err := s.Save(ctx, "de", "a", "Apfel", u1.ID, 0, KeepApproval); err != nil {
+	if _, err := s.Save(ctx, 1, "de", "a", "Apfel", u1.ID, 0, KeepApproval); err != nil {
 		t.Fatal(err)
 	}
 	first := entry(t, s, "de", "a").HistoryID
 	// u2 opened the editor before u1 saved.
-	if _, err := s.Save(ctx, "de", "a", "Äpfel", u2.ID, 0, KeepApproval); !errors.Is(err, ErrConflict) {
+	if _, err := s.Save(ctx, 1, "de", "a", "Äpfel", u2.ID, 0, KeepApproval); !errors.Is(err, ErrConflict) {
 		t.Fatalf("expected conflict, got %v", err)
 	}
-	if _, err := s.Save(ctx, "de", "a", "Äpfel", u2.ID, first, KeepApproval); err != nil {
+	if _, err := s.Save(ctx, 1, "de", "a", "Äpfel", u2.ID, first, KeepApproval); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Revert(ctx, "de", "a", first, u2.ID); err != nil {
+	if err := s.Revert(ctx, 1, "de", "a", first, u2.ID); err != nil {
 		t.Fatal(err)
 	}
 	e := entry(t, s, "de", "a")
@@ -127,7 +143,7 @@ func TestSaveConflictAndRevert(t *testing.T) {
 	}
 
 	// Imports never overwrite edits made here.
-	res, _ := s.ImportTranslations(ctx, "de", parse(t, `{"a": "Apfel!"}`))
+	res, _ := s.ImportTranslations(ctx, 1, "de", parse(t, `{"a": "Apfel!"}`))
 	if len(res.Skipped) != 1 || entry(t, s, "de", "a").Text != "Apfel" {
 		t.Fatalf("import overwrote an edit: %+v", res)
 	}
@@ -152,92 +168,93 @@ func TestSaveConflictAndRevert(t *testing.T) {
 
 func TestListAndNext(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	s.ImportSource(ctx, parse(t, `{"a": "1", "b": "2", "c": "3 100%", "d": "4"}`), nil)
-	s.ImportTranslations(ctx, "de", parse(t, `{"b": "zwei"}`))
+	s.ImportSource(ctx, 1, parse(t, `{"a": "1", "b": "2", "c": "3 100%", "d": "4"}`), nil)
+	s.ImportTranslations(ctx, 1, "de", parse(t, `{"b": "zwei"}`))
 
-	rows, n, _ := s.List(ctx, "de", FilterTodo, "", 0, 10)
+	rows, n, _ := s.List(ctx, 1, "de", FilterTodo, "", 0, 10)
 	if n != 3 || len(rows) != 3 || rows[0].Key != "a" {
 		t.Fatalf("todo: %d %+v", n, rows)
 	}
-	if _, n, _ := s.List(ctx, "de", FilterAll, "%", 0, 10); n != 1 {
+	if _, n, _ := s.List(ctx, 1, "de", FilterAll, "%", 0, 10); n != 1 {
 		t.Errorf("search for %% should match only c literally, got %d", n)
 	}
-	if _, n, _ := s.List(ctx, "de", FilterUnapproved, "zwei", 0, 10); n != 1 {
+	if _, n, _ := s.List(ctx, 1, "de", FilterUnapproved, "zwei", 0, 10); n != 1 {
 		t.Errorf("search in translations: %d", n)
 	}
-	counts, err := s.FilterCounts(ctx, "de", "")
+	counts, err := s.FilterCounts(ctx, 1, "de", "")
 	if err != nil || counts[FilterTodo] != 3 || counts[FilterUnapproved] != 1 || counts[FilterAll] != 4 {
 		t.Errorf("filter counts: %v %v", counts, err)
 	}
-	if counts, _ := s.FilterCounts(ctx, "de", "zwei"); counts[FilterTodo] != 0 || counts[FilterAll] != 1 {
+	if counts, _ := s.FilterCounts(ctx, 1, "de", "zwei"); counts[FilterTodo] != 0 || counts[FilterAll] != 1 {
 		t.Errorf("filter counts with search: %v", counts)
 	}
-	next, _ := s.Next(ctx, "de", FilterTodo, "", "c", 2)
-	if next != "d" {
-		t.Errorf("next after c: %q", next)
+	next, _ := s.Next(ctx, 1, "de", FilterTodo, "", Ref{FileID: 1, Key: "c"})
+	if next != (Ref{1, "intl", "d"}) {
+		t.Errorf("next after c: %+v", next)
 	}
-	next, _ = s.Next(ctx, "de", FilterTodo, "", "d", 3)
-	if next != "a" {
-		t.Errorf("next wraps: %q", next)
+	next, _ = s.Next(ctx, 1, "de", FilterTodo, "", Ref{FileID: 1, Key: "d"})
+	if next.Key != "a" {
+		t.Errorf("next wraps: %+v", next)
 	}
 	// The current key stays in the list, marked, after leaving the filter.
-	keys, err := s.Keys(ctx, "de", FilterTodo, "", "b")
-	want := []KeyState{{"a", "missing", false, true}, {"b", "done", false, false}, {"c", "missing", false, true}, {"d", "missing", false, true}}
+	keys, err := s.Keys(ctx, 1, "de", FilterTodo, "", Ref{FileID: 1, Key: "b"})
+	ref := func(k string) Ref { return Ref{1, "intl", k} }
+	want := []KeyState{{ref("a"), "missing", false, true}, {ref("b"), "done", false, false}, {ref("c"), "missing", false, true}, {ref("d"), "missing", false, true}}
 	if err != nil || !reflect.DeepEqual(keys, want) {
 		t.Errorf("keys: %+v %v", keys, err)
 	}
-	if keys, err := s.Keys(ctx, "de", FilterAll, "%", "a"); err != nil || len(keys) != 2 || keys[0].Matches || !keys[1].Matches || keys[1].Key != "c" {
+	if keys, err := s.Keys(ctx, 1, "de", FilterAll, "%", Ref{FileID: 1, Key: "a"}); err != nil || len(keys) != 2 || keys[0].Matches || !keys[1].Matches || keys[1].Key != "c" {
 		t.Errorf("keys with search: %+v %v", keys, err)
 	}
 }
 
 func TestDrafts(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "b placeholder", "@b": {"x-draft": true}, "c": "Cherry", "@c": {"x-draft": false}}`), nil)
+	s.ImportSource(ctx, 1, parse(t, `{"a": "Apple", "b": "b placeholder", "@b": {"x-draft": true}, "c": "Cherry", "@c": {"x-draft": false}}`), nil)
 	s.AddLanguage(ctx, "de")
 
-	if _, n, _ := s.List(ctx, "de", FilterAll, "", 0, 10); n != 2 {
+	if _, n, _ := s.List(ctx, 1, "de", FilterAll, "", 0, 10); n != 2 {
 		t.Errorf("list should hide the draft, got %d", n)
 	}
-	if next, _ := s.Next(ctx, "de", FilterTodo, "", "a", 0); next != "c" {
-		t.Errorf("next should skip the draft: %q", next)
+	if next, _ := s.Next(ctx, 1, "de", FilterTodo, "", Ref{FileID: 1, Key: "a"}); next.Key != "c" {
+		t.Errorf("next should skip the draft: %+v", next)
 	}
-	if stats, _ := s.Stats(ctx); stats[0].Total != 2 || stats[0].Missing != 2 {
+	if stats, _ := s.Stats(ctx, 0); stats[0].Total != 2 || stats[0].Missing != 2 {
 		t.Errorf("stats: %+v", stats)
 	}
-	if _, err := s.Entry(ctx, "de", "b"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Entry(ctx, 1, "de", "b"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("entry of draft: %v", err)
 	}
-	if _, err := s.Save(ctx, "de", "b", "x", 0, -1, KeepApproval); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Save(ctx, 1, "de", "b", "x", 0, -1, KeepApproval); !errors.Is(err, ErrNotFound) {
 		t.Errorf("save of draft: %v", err)
 	}
 
 	// The source export keeps the draft and its metadata.
-	f, _ := s.Export(ctx, "en")
+	f, _ := s.Export(ctx, 1, "en")
 	if len(f.Messages) != 3 || !arb.Draft(f.Messages[1].Meta) {
 		t.Errorf("source export: %+v", f.Messages)
 	}
 
 	// Dropping the tag makes it translatable.
-	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana", "c": "Cherry"}`), nil)
-	if _, n, _ := s.List(ctx, "de", FilterAll, "", 0, 10); n != 3 {
+	s.ImportSource(ctx, 1, parse(t, `{"a": "Apple", "b": "Banana", "c": "Cherry"}`), nil)
+	if _, n, _ := s.List(ctx, 1, "de", FilterAll, "", 0, 10); n != 3 {
 		t.Errorf("list after finishing the draft: %d", n)
 	}
 }
 
 func TestSourceDecisions(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	s.ImportSource(ctx, parse(t, `{"a": "Teh cat", "b": "Dog", "c": "Bird", "d": "Fish"}`), nil)
-	s.ImportTranslations(ctx, "de", parse(t, `{"a": "Die Katze", "b": "Hund", "c": "Vogel"}`))
+	s.ImportSource(ctx, 1, parse(t, `{"a": "Teh cat", "b": "Dog", "c": "Bird", "d": "Fish"}`), nil)
+	s.ImportTranslations(ctx, 1, "de", parse(t, `{"a": "Die Katze", "b": "Hund", "c": "Vogel"}`))
 	ai, _ := s.CreateAIUser(ctx, "Claude Opus", "anthropic/claude-opus-5.5")
 	for k, text := range map[string]string{"a": "Eine Katze", "b": "Der Hund", "c": "Ein Vogel", "d": "Fische"} {
-		if err := s.Suggest(ctx, "de", k, text, ai.ID); err != nil {
+		if err := s.Suggest(ctx, 1, "de", k, text, ai.ID); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	f := parse(t, `{"a": "The cat", "b": "Wolf", "c": "Eagle", "d": "Fish", "e": "New"}`)
-	d, err := s.PreviewSource(ctx, f)
+	d, err := s.PreviewSource(ctx, 1, f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +265,7 @@ func TestSourceDecisions(t *testing.T) {
 		t.Fatal("preview must not change anything")
 	}
 
-	res, err := s.ImportSource(ctx, f, map[string]string{"a": KeepTranslations, "c": RemoveTranslations})
+	res, err := s.ImportSource(ctx, 1, f, map[string]string{"a": KeepTranslations, "c": RemoveTranslations})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +295,7 @@ func TestSourceDecisions(t *testing.T) {
 	}
 
 	// An older file doesn't bring back the removed translation or mark the outdated one up to date.
-	tr, err := s.ImportTranslations(ctx, "de", parse(t, `{"a": "Die Katze", "b": "Hund", "c": "Vogel", "e": "Neu"}`))
+	tr, err := s.ImportTranslations(ctx, 1, "de", parse(t, `{"a": "Die Katze", "b": "Hund", "c": "Vogel", "e": "Neu"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,11 +310,11 @@ func TestSourceDecisions(t *testing.T) {
 	}
 
 	// The same file again changes nothing and keeps the revision.
-	if d, _ := s.PreviewSource(ctx, f); d.Modified || d.Revision != 2 {
+	if d, _ := s.PreviewSource(ctx, 1, f); d.Modified || d.Revision != 2 {
 		t.Errorf("reimport: %+v", d)
 	}
 	// A metadata change alone is a new revision.
-	res, _ = s.ImportSource(ctx, parse(t, `{"a": "The cat", "@a": {"description": "Pet"}, "b": "Wolf", "c": "Eagle", "d": "Fish", "e": "New"}`), nil)
+	res, _ = s.ImportSource(ctx, 1, parse(t, `{"a": "The cat", "@a": {"description": "Pet"}, "b": "Wolf", "c": "Eagle", "d": "Fish", "e": "New"}`), nil)
 	if res.Revision != 3 || res.Changed != 0 {
 		t.Errorf("metadata change: %+v", res)
 	}
@@ -305,21 +322,21 @@ func TestSourceDecisions(t *testing.T) {
 
 func TestSourceCopies(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	s.ImportSource(ctx, parse(t, `{"tank": "Tank", "wolf": "Wolf", "ice": "Ice Vault", "n": "{count}", "hi": "Hello"}`), nil)
+	s.ImportSource(ctx, 1, parse(t, `{"tank": "Tank", "wolf": "Wolf", "ice": "Ice Vault", "n": "{count}", "hi": "Hello"}`), nil)
 	s.AddLanguage(ctx, "de")
 	u, _ := s.CreateUser(ctx, "t@example.com", "Tess", "translator")
-	if _, err := s.Save(ctx, "de", "tank", "Tank", u.ID, 0, KeepApproval); err != nil {
+	if _, err := s.Save(ctx, 1, "de", "tank", "Tank", u.ID, 0, KeepApproval); err != nil {
 		t.Fatal(err)
 	}
 	// A copy stored by an import from before copies counted as missing.
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		return write(ctx, tx, "de", "ice", "Ice Vault", sourceHash("Ice Vault"), "import", 0)
+		return write(ctx, tx, 1, "de", "ice", "Ice Vault", sourceHash("Ice Vault"), "import", 0)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	res, err := s.ImportTranslations(ctx, "de", parse(t,
+	res, err := s.ImportTranslations(ctx, 1, "de", parse(t,
 		`{"tank": "Tank", "wolf": "Wolf", "ice": "Ice Vault", "n": "{count}", "hi": "Hallo"}`))
 	if err != nil || res.Added != 2 || res.Unchanged != 1 || len(res.Untranslated) != 2 {
 		t.Fatalf("import: %+v %v", res, err)
@@ -337,64 +354,64 @@ func TestSourceCopies(t *testing.T) {
 
 func TestApproval(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana"}`), nil)
-	s.ImportTranslations(ctx, "de", parse(t, `{"a": "Apfel", "b": "Banane"}`))
+	s.ImportSource(ctx, 1, parse(t, `{"a": "Apple", "b": "Banana"}`), nil)
+	s.ImportTranslations(ctx, 1, "de", parse(t, `{"a": "Apfel", "b": "Banane"}`))
 	p, _ := s.CreateUser(ctx, "p@example.com", "Petra", "proofreader")
 	if !p.CanApprove() {
 		t.Fatal("proofreaders approve")
 	}
 
-	saved, err := s.Save(ctx, "de", "a", "Apfel", p.ID, entry(t, s, "de", "a").HistoryID, Approve)
+	saved, err := s.Save(ctx, 1, "de", "a", "Apfel", p.ID, entry(t, s, "de", "a").HistoryID, Approve)
 	if err != nil || !saved {
 		t.Fatal(saved, err)
 	}
 	if e := entry(t, s, "de", "a"); !e.Approved || e.ApprovedBy != "Petra" || e.ApprovedAt == "" || len(e.History) != 1 {
 		t.Fatalf("approved: %+v", e)
 	}
-	if saved, err := s.Save(ctx, "de", "a", "Apfel", p.ID, -1, Approve); err != nil || saved {
+	if saved, err := s.Save(ctx, 1, "de", "a", "Apfel", p.ID, -1, Approve); err != nil || saved {
 		t.Error("approving again changes nothing", saved, err)
 	}
 
 	// Approved translations can't be changed, not even by restoring or importing.
-	if _, err := s.Save(ctx, "de", "a", "Äpfel", 0, -1, KeepApproval); !errors.Is(err, ErrApproved) {
+	if _, err := s.Save(ctx, 1, "de", "a", "Äpfel", 0, -1, KeepApproval); !errors.Is(err, ErrApproved) {
 		t.Errorf("edit approved: %v", err)
 	}
-	if saved, err := s.Save(ctx, "de", "a", "Apfel", 0, -1, KeepApproval); err != nil || saved {
+	if saved, err := s.Save(ctx, 1, "de", "a", "Apfel", 0, -1, KeepApproval); err != nil || saved {
 		t.Error("unchanged save of approved text", saved, err)
 	}
-	if res, _ := s.ImportTranslations(ctx, "de", parse(t, `{"a": "Äpfel", "b": "Bananen"}`)); len(res.Skipped) != 1 || res.Updated != 1 {
+	if res, _ := s.ImportTranslations(ctx, 1, "de", parse(t, `{"a": "Äpfel", "b": "Bananen"}`)); len(res.Skipped) != 1 || res.Updated != 1 {
 		t.Errorf("import over approved: %+v", res)
 	}
-	if st, _ := s.Stats(ctx); st[0].Approved != 1 || st[0].Done != 2 {
+	if st, _ := s.Stats(ctx, 0); st[0].Approved != 1 || st[0].Done != 2 {
 		t.Errorf("stats: %+v", st)
 	}
-	if rows, n, _ := s.List(ctx, "de", FilterUnapproved, "", 0, 10); n != 1 || rows[0].Key != "b" {
+	if rows, n, _ := s.List(ctx, 1, "de", FilterUnapproved, "", 0, 10); n != 1 || rows[0].Key != "b" {
 		t.Errorf("unapproved filter: %+v", rows)
 	}
 
 	// Removing the approval and editing in one save.
-	if _, err := s.Save(ctx, "de", "a", "Äpfel", p.ID, -1, Unapprove); err != nil {
+	if _, err := s.Save(ctx, 1, "de", "a", "Äpfel", p.ID, -1, Unapprove); err != nil {
 		t.Fatal(err)
 	}
 	if e := entry(t, s, "de", "a"); e.Approved || e.Text != "Äpfel" {
 		t.Errorf("unapproved: %+v", e.Row)
 	}
 	// Proofreaders can change approved text and keep it approved.
-	s.Save(ctx, "de", "a", "Äpfel", p.ID, -1, Approve)
-	if saved, err := s.Save(ctx, "de", "a", "Apfel", p.ID, -1, Approve); err != nil || !saved {
+	s.Save(ctx, 1, "de", "a", "Äpfel", p.ID, -1, Approve)
+	if saved, err := s.Save(ctx, 1, "de", "a", "Apfel", p.ID, -1, Approve); err != nil || !saved {
 		t.Fatal(saved, err)
 	}
 	e := entry(t, s, "de", "a")
 	if !e.Approved || e.Text != "Apfel" || len(e.History) != 3 {
 		t.Fatalf("edited approved: %+v", e)
 	}
-	if err := s.Revert(ctx, "de", "a", e.History[1].ID, 0); !errors.Is(err, ErrApproved) {
+	if err := s.Revert(ctx, 1, "de", "a", e.History[1].ID, 0); !errors.Is(err, ErrApproved) {
 		t.Errorf("revert approved: %v", err)
 	}
 
 	// A kept source change keeps the approval; outdating removes it.
-	s.Save(ctx, "de", "b", "Bananen", p.ID, -1, Approve)
-	s.ImportSource(ctx, parse(t, `{"a": "Apples", "b": "Bananas"}`), map[string]string{"a": KeepTranslations})
+	s.Save(ctx, 1, "de", "b", "Bananen", p.ID, -1, Approve)
+	s.ImportSource(ctx, 1, parse(t, `{"a": "Apples", "b": "Bananas"}`), map[string]string{"a": KeepTranslations})
 	if e := entry(t, s, "de", "a"); !e.Approved || e.Outdated {
 		t.Errorf("kept: %+v", e.Row)
 	}
@@ -459,10 +476,10 @@ func TestUsersAndTokens(t *testing.T) {
 
 func TestActivity(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	if _, err := s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana"}`), nil); err != nil {
+	if _, err := s.ImportSource(ctx, 1, parse(t, `{"a": "Apple", "b": "Banana"}`), nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ImportTranslations(ctx, "de", parse(t, `{"a": "Apfel"}`)); err != nil {
+	if _, err := s.ImportTranslations(ctx, 1, "de", parse(t, `{"a": "Apfel"}`)); err != nil {
 		t.Fatal(err)
 	}
 	s.AddLanguage(ctx, "fr")
@@ -470,14 +487,14 @@ func TestActivity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Save(ctx, "de", "a", "Äpfel", u.ID, -1, Approve); err != nil {
+	if _, err := s.Save(ctx, 1, "de", "a", "Äpfel", u.ID, -1, Approve); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Save(ctx, "fr", "b", "Banane", u.ID, -1, KeepApproval); err != nil {
+	if _, err := s.Save(ctx, 1, "fr", "b", "Banane", u.ID, -1, KeepApproval); err != nil {
 		t.Fatal(err)
 	}
 	// Changing the source removes the approval.
-	if _, err := s.ImportSource(ctx, parse(t, `{"a": "Apples", "b": "Banana"}`), nil); err != nil {
+	if _, err := s.ImportSource(ctx, 1, parse(t, `{"a": "Apples", "b": "Banana"}`), nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -512,12 +529,12 @@ func TestActivity(t *testing.T) {
 
 func TestMergeUser(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana"}`), nil)
+	s.ImportSource(ctx, 1, parse(t, `{"a": "Apple", "b": "Banana"}`), nil)
 	s.AddLanguage(ctx, "de")
 	s.CreateUser(ctx, "admin@example.com", "Admin", "admin")
 	old, _ := s.CreateUser(ctx, "old@crowdin.invalid", "Old", "proofreader")
-	s.Save(ctx, "de", "a", "Apfel", old.ID, -1, Approve)
-	s.Save(ctx, "de", "b", "Banane", old.ID, -1, KeepApproval)
+	s.Save(ctx, 1, "de", "a", "Apfel", old.ID, -1, Approve)
+	s.Save(ctx, 1, "de", "b", "Banane", old.ID, -1, KeepApproval)
 	sess, _ := s.CreateSession(ctx, old.ID)
 	if n, a, err := s.Contributions(ctx, old.ID); err != nil || n != 2 || a != 1 {
 		t.Fatalf("contributions: %d %d %v", n, a, err)
@@ -583,32 +600,32 @@ func TestBackup(t *testing.T) {
 
 func TestDeleteVersion(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	s.ImportSource(ctx, parse(t, `{"a": "Apple"}`), nil)
+	s.ImportSource(ctx, 1, parse(t, `{"a": "Apple"}`), nil)
 	s.AddLanguage(ctx, "de")
 	one, _ := s.CreateUser(ctx, "one@example.com", "One", "translator")
 	two, _ := s.CreateUser(ctx, "two@example.com", "Two", "translator")
 	p, _ := s.CreateUser(ctx, "p@example.com", "Petra", "proofreader")
 
-	s.Save(ctx, "de", "a", "Apfel", one.ID, -1, KeepApproval)
+	s.Save(ctx, 1, "de", "a", "Apfel", one.ID, -1, KeepApproval)
 	first := entry(t, s, "de", "a").HistoryID
-	s.Save(ctx, "de", "a", "Äpfel", two.ID, -1, KeepApproval)
+	s.Save(ctx, 1, "de", "a", "Äpfel", two.ID, -1, KeepApproval)
 	second := entry(t, s, "de", "a").HistoryID
 
 	// Only the author or a proofreader may delete.
-	if err := s.DeleteVersion(ctx, "de", "a", first, two); !errors.Is(err, ErrForbidden) {
+	if err := s.DeleteVersion(ctx, 1, "de", "a", first, two); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("deleted someone else's version: %v", err)
 	}
-	if err := s.DeleteVersion(ctx, "de", "b", second, two); !errors.Is(err, ErrNotFound) {
+	if err := s.DeleteVersion(ctx, 1, "de", "b", second, two); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("wrong key: %v", err)
 	}
 
 	// Approved: the current version is locked for translators.
-	s.Save(ctx, "de", "a", "Äpfel", p.ID, -1, Approve)
-	if err := s.DeleteVersion(ctx, "de", "a", second, two); !errors.Is(err, ErrApproved) {
+	s.Save(ctx, 1, "de", "a", "Äpfel", p.ID, -1, Approve)
+	if err := s.DeleteVersion(ctx, 1, "de", "a", second, two); !errors.Is(err, ErrApproved) {
 		t.Fatalf("deleted an approved version: %v", err)
 	}
 	// A proofreader can; the one before becomes current, without approval.
-	if err := s.DeleteVersion(ctx, "de", "a", second, p); err != nil {
+	if err := s.DeleteVersion(ctx, 1, "de", "a", second, p); err != nil {
 		t.Fatal(err)
 	}
 	e := entry(t, s, "de", "a")
@@ -616,7 +633,7 @@ func TestDeleteVersion(t *testing.T) {
 		t.Fatalf("after deleting the current version: %+v", e)
 	}
 	// The last version: the string is missing again.
-	if err := s.DeleteVersion(ctx, "de", "a", first, one); err != nil {
+	if err := s.DeleteVersion(ctx, 1, "de", "a", first, one); err != nil {
 		t.Fatal(err)
 	}
 	if e := entry(t, s, "de", "a"); e.Has || len(e.History) != 0 {
@@ -626,25 +643,25 @@ func TestDeleteVersion(t *testing.T) {
 
 func TestDeleteUserVersions(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana", "c": "Cherry"}`), nil)
+	s.ImportSource(ctx, 1, parse(t, `{"a": "Apple", "b": "Banana", "c": "Cherry"}`), nil)
 	s.AddLanguage(ctx, "de")
 	s.AddLanguage(ctx, "fr")
 	one, _ := s.CreateUser(ctx, "one@example.com", "One", "translator")
 	two, _ := s.CreateUser(ctx, "two@example.com", "Two", "translator")
 	p, _ := s.CreateUser(ctx, "p@example.com", "Petra", "proofreader")
 
-	s.Save(ctx, "de", "a", "Apfel 1", one.ID, -1, KeepApproval)
-	s.Save(ctx, "de", "a", "Apfel 2", two.ID, -1, KeepApproval)
-	s.Save(ctx, "de", "a", "Apfel 3", one.ID, -1, KeepApproval)
-	s.Save(ctx, "de", "b", "Banane", one.ID, -1, KeepApproval)
-	s.Save(ctx, "de", "b", "Banane", p.ID, -1, Approve)
-	s.Save(ctx, "de", "c", "Kirsche", one.ID, -1, KeepApproval)
-	s.Save(ctx, "fr", "a", "Pomme 1", two.ID, -1, KeepApproval)
-	s.Save(ctx, "fr", "a", "Pomme 2", one.ID, -1, KeepApproval)
-	s.Save(ctx, "fr", "a", "Pomme 2", p.ID, -1, Approve)
-	s.Suggest(ctx, "de", "b", "Bananen", one.ID)
-	s.Suggest(ctx, "fr", "b", "Banane", one.ID)
-	s.Suggest(ctx, "de", "c", "Kirschen", two.ID)
+	s.Save(ctx, 1, "de", "a", "Apfel 1", one.ID, -1, KeepApproval)
+	s.Save(ctx, 1, "de", "a", "Apfel 2", two.ID, -1, KeepApproval)
+	s.Save(ctx, 1, "de", "a", "Apfel 3", one.ID, -1, KeepApproval)
+	s.Save(ctx, 1, "de", "b", "Banane", one.ID, -1, KeepApproval)
+	s.Save(ctx, 1, "de", "b", "Banane", p.ID, -1, Approve)
+	s.Save(ctx, 1, "de", "c", "Kirsche", one.ID, -1, KeepApproval)
+	s.Save(ctx, 1, "fr", "a", "Pomme 1", two.ID, -1, KeepApproval)
+	s.Save(ctx, 1, "fr", "a", "Pomme 2", one.ID, -1, KeepApproval)
+	s.Save(ctx, 1, "fr", "a", "Pomme 2", p.ID, -1, Approve)
+	s.Suggest(ctx, 1, "de", "b", "Bananen", one.ID)
+	s.Suggest(ctx, 1, "fr", "b", "Banane", one.ID)
+	s.Suggest(ctx, 1, "de", "c", "Kirschen", two.ID)
 
 	// One language, approved versions kept.
 	v, g, err := s.DeleteUserVersions(ctx, one.ID, "de", false)
@@ -682,7 +699,7 @@ func TestDeleteUserVersions(t *testing.T) {
 
 func TestSuggestions(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana"}`), nil)
+	s.ImportSource(ctx, 1, parse(t, `{"a": "Apple", "b": "Banana"}`), nil)
 	s.AddLanguage(ctx, "de")
 	opus, err := s.CreateAIUser(ctx, "Claude Opus", "anthropic/claude-opus-5.5")
 	if err != nil || !opus.IsAI() || !opus.Unlisted {
@@ -692,28 +709,28 @@ func TestSuggestions(t *testing.T) {
 	tr, _ := s.CreateUser(ctx, "t@example.com", "Tom", "translator")
 	p, _ := s.CreateUser(ctx, "p@example.com", "Petra", "proofreader")
 
-	if err := s.Suggest(ctx, "de", "missing", "x", opus.ID); !errors.Is(err, ErrNotFound) {
+	if err := s.Suggest(ctx, 1, "de", "missing", "x", opus.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("unknown key: %v", err)
 	}
-	s.Suggest(ctx, "de", "a", "Apfel?", opus.ID)
-	s.Suggest(ctx, "de", "a", "Apfel", opus.ID) // replaces the first
-	s.Suggest(ctx, "de", "a", "Der Apfel", haiku.ID)
+	s.Suggest(ctx, 1, "de", "a", "Apfel?", opus.ID)
+	s.Suggest(ctx, 1, "de", "a", "Apfel", opus.ID) // replaces the first
+	s.Suggest(ctx, 1, "de", "a", "Der Apfel", haiku.ID)
 	e := entry(t, s, "de", "a")
 	if len(e.Suggestions) != 2 || e.Suggestions[0].Text != "Apfel" || e.Suggestions[0].AIModel != "anthropic/claude-opus-5.5" {
 		t.Fatalf("suggestions: %+v", e.Suggestions)
 	}
-	if rows, _, _ := s.List(ctx, "de", FilterAll, "", 0, 10); rows[0].Suggestions != 2 || rows[1].Suggestions != 0 {
+	if rows, _, _ := s.List(ctx, 1, "de", FilterAll, "", 0, 10); rows[0].Suggestions != 2 || rows[1].Suggestions != 0 {
 		t.Errorf("counts: %+v", rows)
 	}
 
 	// Using one makes it current, credited to the AI user, and removes it.
-	if err := s.UseSuggestion(ctx, "de", "a", e.Suggestions[0].ID, tr, 0, true); !errors.Is(err, ErrForbidden) {
+	if err := s.UseSuggestion(ctx, 1, "de", "a", e.Suggestions[0].ID, tr, 0, true); !errors.Is(err, ErrForbidden) {
 		t.Errorf("translators can't approve: %v", err)
 	}
-	if err := s.UseSuggestion(ctx, "de", "a", e.Suggestions[0].ID, tr, 99, false); !errors.Is(err, ErrConflict) {
+	if err := s.UseSuggestion(ctx, 1, "de", "a", e.Suggestions[0].ID, tr, 99, false); !errors.Is(err, ErrConflict) {
 		t.Errorf("stale base: %v", err)
 	}
-	if err := s.UseSuggestion(ctx, "de", "a", e.Suggestions[0].ID, tr, 0, false); err != nil {
+	if err := s.UseSuggestion(ctx, 1, "de", "a", e.Suggestions[0].ID, tr, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	e = entry(t, s, "de", "a")
@@ -723,26 +740,26 @@ func TestSuggestions(t *testing.T) {
 
 	// A suggestion equal to the current text is listed, marked as the same,
 	// but not counted in the list.
-	s.Suggest(ctx, "de", "a", "Apfel", haiku.ID)
+	s.Suggest(ctx, 1, "de", "a", "Apfel", haiku.ID)
 	if e := entry(t, s, "de", "a"); len(e.Suggestions) != 1 || !e.Suggestions[0].Same {
 		t.Errorf("same as current: %+v", e.Suggestions)
 	}
-	if rows, _, _ := s.List(ctx, "de", FilterAll, "", 0, 10); rows[0].Suggestions != 0 {
+	if rows, _, _ := s.List(ctx, 1, "de", FilterAll, "", 0, 10); rows[0].Suggestions != 0 {
 		t.Errorf("same as current counted: %+v", rows[0])
 	}
-	s.Suggest(ctx, "de", "a", "Der Apfel", haiku.ID)
+	s.Suggest(ctx, 1, "de", "a", "Der Apfel", haiku.ID)
 
 	// Approved strings aren't counted in the list, and only proofreaders
 	// can replace them.
-	s.Save(ctx, "de", "a", "Apfel", p.ID, -1, Approve)
-	if rows, _, _ := s.List(ctx, "de", FilterAll, "", 0, 10); rows[0].Suggestions != 0 {
+	s.Save(ctx, 1, "de", "a", "Apfel", p.ID, -1, Approve)
+	if rows, _, _ := s.List(ctx, 1, "de", FilterAll, "", 0, 10); rows[0].Suggestions != 0 {
 		t.Errorf("approved count: %+v", rows[0])
 	}
 	id := entry(t, s, "de", "a").Suggestions[0].ID
-	if err := s.UseSuggestion(ctx, "de", "a", id, tr, -1, false); !errors.Is(err, ErrApproved) {
+	if err := s.UseSuggestion(ctx, 1, "de", "a", id, tr, -1, false); !errors.Is(err, ErrApproved) {
 		t.Errorf("translator over approved: %v", err)
 	}
-	if err := s.UseSuggestion(ctx, "de", "a", id, p, -1, true); err != nil {
+	if err := s.UseSuggestion(ctx, 1, "de", "a", id, p, -1, true); err != nil {
 		t.Fatal(err)
 	}
 	if e := entry(t, s, "de", "a"); e.Text != "Der Apfel" || !e.Approved || e.ApprovedBy != "Petra" || e.UserID != haiku.ID {
@@ -750,23 +767,23 @@ func TestSuggestions(t *testing.T) {
 	}
 
 	// Dismissing, and hiding suggestions for an older source text.
-	s.Suggest(ctx, "de", "b", "Banane", opus.ID)
+	s.Suggest(ctx, 1, "de", "b", "Banane", opus.ID)
 	id = entry(t, s, "de", "b").Suggestions[0].ID
-	if err := s.DismissSuggestion(ctx, "de", "b", id, tr); !errors.Is(err, ErrForbidden) {
+	if err := s.DismissSuggestion(ctx, 1, "de", "b", id, tr); !errors.Is(err, ErrForbidden) {
 		t.Errorf("translator dismiss: %v", err)
 	}
-	if err := s.DismissSuggestion(ctx, "de", "b", id, p); err != nil {
+	if err := s.DismissSuggestion(ctx, 1, "de", "b", id, p); err != nil {
 		t.Fatal(err)
 	}
-	s.Suggest(ctx, "de", "b", "Banane", opus.ID)
-	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Bananas"}`), nil)
+	s.Suggest(ctx, 1, "de", "b", "Banane", opus.ID)
+	s.ImportSource(ctx, 1, parse(t, `{"a": "Apple", "b": "Bananas"}`), nil)
 	if e := entry(t, s, "de", "b"); len(e.Suggestions) != 0 {
 		t.Errorf("old source text: %+v", e.Suggestions)
 	}
 
 	// Merging moves suggestions.
 	s.CreateUser(ctx, "admin@example.com", "Ada", "admin")
-	s.Suggest(ctx, "de", "b", "Bananen", haiku.ID)
+	s.Suggest(ctx, 1, "de", "b", "Bananen", haiku.ID)
 	if err := s.MergeUser(ctx, haiku.ID, opus.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -777,26 +794,26 @@ func TestSuggestions(t *testing.T) {
 
 func TestPromoteSuggestions(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Banana", "c": "Cherry", "d": "Date", "e": "Elder"}`), nil)
+	s.ImportSource(ctx, 1, parse(t, `{"a": "Apple", "b": "Banana", "c": "Cherry", "d": "Date", "e": "Elder"}`), nil)
 	s.AddLanguage(ctx, "de")
 	opus, _ := s.CreateAIUser(ctx, "Claude Opus", "anthropic/claude-opus-5.5")
 	haiku, _ := s.CreateAIUser(ctx, "Claude Haiku", "anthropic/claude-haiku-5.5")
 	p, _ := s.CreateUser(ctx, "p@example.com", "Petra", "proofreader")
-	s.Save(ctx, "de", "a", "Apfel", p.ID, -1, KeepApproval)
-	s.Save(ctx, "de", "b", "Banane", p.ID, -1, KeepApproval)
-	s.Save(ctx, "de", "c", "Kirsche", p.ID, -1, Approve)
-	s.Suggest(ctx, "de", "e", "Holunder", opus.ID)
-	s.ImportSource(ctx, parse(t, `{"a": "Apple", "b": "Bananas", "c": "Cherry", "d": "Date", "e": "Elderberry"}`), nil)
+	s.Save(ctx, 1, "de", "a", "Apfel", p.ID, -1, KeepApproval)
+	s.Save(ctx, 1, "de", "b", "Banane", p.ID, -1, KeepApproval)
+	s.Save(ctx, 1, "de", "c", "Kirsche", p.ID, -1, Approve)
+	s.Suggest(ctx, 1, "de", "e", "Holunder", opus.ID)
+	s.ImportSource(ctx, 1, parse(t, `{"a": "Apple", "b": "Bananas", "c": "Cherry", "d": "Date", "e": "Elderberry"}`), nil)
 	for k, text := range map[string]string{"a": "Der Apfel", "b": "Bananen", "c": "Die Kirsche", "d": "Dattel"} {
-		s.Suggest(ctx, "de", k, text, opus.ID)
+		s.Suggest(ctx, 1, "de", k, text, opus.ID)
 	}
-	s.Suggest(ctx, "de", "d", "Die Dattel", haiku.ID)
+	s.Suggest(ctx, 1, "de", "d", "Die Dattel", haiku.ID)
 
 	// Only the outdated b and the missing d; e's suggestion is for the old source.
-	if fill, _ := s.AIFillStats(ctx, opus.ID); len(fill) != 1 || fill[0].Promotable != 2 {
+	if fill, _ := s.AIFillStats(ctx, 1, opus.ID); len(fill) != 1 || fill[0].Promotable != 2 {
 		t.Fatalf("promotable: %+v", fill)
 	}
-	n, err := s.PromoteSuggestions(ctx, "de", opus.ID)
+	n, err := s.PromoteSuggestions(ctx, 1, "de", opus.ID)
 	if err != nil || n != 2 {
 		t.Fatalf("promote: %d %v", n, err)
 	}
@@ -817,7 +834,7 @@ func TestPromoteSuggestions(t *testing.T) {
 	if e := entry(t, s, "de", "e"); e.Has {
 		t.Errorf("suggestion for the old source promoted: %+v", e.Row)
 	}
-	if n, _ := s.PromoteSuggestions(ctx, "de", opus.ID); n != 0 {
+	if n, _ := s.PromoteSuggestions(ctx, 1, "de", opus.ID); n != 0 {
 		t.Errorf("promoted again: %d", n)
 	}
 }
