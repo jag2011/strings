@@ -12,10 +12,10 @@
   {{end}}
   </nav>
   {{template "file-chips" $d.Chips}}
-  <a class="toolbar-link" href="{{base}}/activity?lang={{$d.Lang}}">Activity</a>
+  <a class="button icon-button toolbar-link" href="{{base}}/activity?lang={{$d.Lang}}" title="Activity in {{langName $d.Lang}}" aria-label="Activity in {{langName $d.Lang}}">{{template "icon" "activity"}}</a>
   <input type="hidden" name="filter" value="{{$d.Filter}}">
   {{with $d.File}}<input type="hidden" name="file" value="{{.}}">{{end}}
-  <input type="search" name="q" value="{{$d.Q}}" placeholder="Search keys and text" aria-label="Search">
+  <span class="search">{{template "icon" "search"}}<input type="search" name="q" value="{{$d.Q}}" placeholder="Search keys and text" aria-label="Search"></span>
 </form>
 
 <div data-results>

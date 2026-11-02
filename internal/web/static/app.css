@@ -263,8 +263,18 @@ form.grid .span { grid-column: 1 / -1; }
 
 .crumbs { margin: 0 0 4px; color: var(--muted); font-size: 13px; }
 .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.toolbar input[type=search] { flex: 0 1 320px; min-width: 0; }
-.toolbar-link { margin: 0 auto 0 12px; }
+/* Pushes the search to the right while it fits on the first row; once it
+   wraps (several files), it starts the second row. */
+.toolbar-link { margin-right: auto; }
+.icon-button {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; padding: 0; color: var(--muted);
+}
+.icon-button:hover { color: var(--text); }
+.icon-button .icon { width: 16px; height: 16px; }
+.search { position: relative; display: flex; flex: 0 1 320px; min-width: 0; }
+.search .icon { position: absolute; left: 10px; top: 50%; translate: 0 -50%; color: var(--muted); pointer-events: none; }
+.search input { width: 100%; padding-left: 32px; }
 .tabs { display: flex; gap: 2px; background: var(--line); padding: 2px; border-radius: 8px; }
 .tabs a { padding: 4px 12px; border-radius: 6px; color: var(--muted); }
 .tabs a:hover { text-decoration: none; color: var(--text); }

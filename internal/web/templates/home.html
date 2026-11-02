@@ -3,9 +3,9 @@
   <p class="empty">No strings yet.
   {{if .User.IsAdmin}}<a href="{{base}}/admin#import">Import ARB files</a> to get started.{{else}}An admin needs to import them first.{{end}}</p>
 {{else}}
+{{template "file-chips" .Data.Chips}}
 <div class="with-side">
 <div>
-{{template "file-chips" .Data.Chips}}
 {{if not .Data.Stats}}
   <p class="empty">No languages yet.{{if .User.IsAdmin}} <a href="{{base}}/admin#languages">Add one</a>.{{end}}</p>
 {{end}}
